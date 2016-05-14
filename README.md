@@ -29,6 +29,7 @@ var PoolDone = io.EOF
 type HookFn func(PoolJob)
 ```
 
+HookFn is a function to be called when a Job state triggers a set Pool Hook
 
 #### type Identifier
 
@@ -47,6 +48,8 @@ func (s Identifier) String() string
 
 ```go
 type Pool struct {
+	Cancel chan struct{}
+
 	Hook struct {
 		Done  HookFn
 		Add   HookFn
@@ -104,6 +107,7 @@ type PoolError struct {
 }
 ```
 
+PoolError is an error from a particular Job in the pool
 
 #### func  NewPoolError
 

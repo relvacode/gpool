@@ -2,8 +2,6 @@
 package gpool
 
 import (
-	"errors"
-	"fmt"
 	"io"
 	"log"
 	"os"
@@ -17,35 +15,19 @@ func (s Identifier) String() string {
 	return string(s)
 }
 
-type PoolError struct {
-	J PoolJob
-	E error
-}
-
-func (e PoolError) Error() string {
-	return fmt.Sprintf("%s: %s", e.J.Identifier().String(), e.E.Error())
-}
-
-func NewPoolError(Job PoolJob, Error error) *PoolError {
-	return &PoolError{
-		J: Job,
-		E: Error,
-	}
-}
-
 var PoolDone = io.EOF
 
 type Pool struct {
-	c    chan PoolJob
-	d    chan struct{}
-	k    chan struct{}
-	e    chan error
-	o    chan PoolJob
-	w    int
-	cw   int // Current workers
-	wg   *sync.WaitGroup
-	m    *sync.Mutex
-	Hook struct {
+	c      chan PoolJob
+	d      chan struct{}
+	Cancel chan struct{}
+	e      chan error
+	o      chan PoolJob
+	w      int
+	cw     int // Current workers
+	wg     *sync.WaitGroup
+	m      *sync.Mutex
+	Hook   struct {
 		Done  HookFn
 		Add   HookFn
 		Start HookFn
@@ -58,21 +40,26 @@ type Pool struct {
 // NewPool creates a new Pool with the given worker count
 func NewPool(Workers int) *Pool {
 	return &Pool{
-		c:  make(chan PoolJob),
-		d:  make(chan struct{}),
-		k:  make(chan struct{}, Workers),
-		o:  make(chan PoolJob),
-		e:  make(chan error, Workers),
-		wg: &sync.WaitGroup{},
-		m:  &sync.Mutex{},
-		w:  Workers,
+		c:      make(chan PoolJob),
+		d:      make(chan struct{}),
+		Cancel: make(chan struct{}, Workers),
+		o:      make(chan PoolJob),
+		e:      make(chan error, Workers),
+		wg:     &sync.WaitGroup{},
+		m:      &sync.Mutex{},
+		w:      Workers,
 	}
 }
 
 // Send sends a given PoolJob to the worker queue
 func (p *Pool) Send(job PoolJob) {
-	p.c <- job
-	p.doHook(HookAdd, job)
+	p.m.Lock()
+	defer p.m.Unlock()
+	if p.killed != true {
+		p.c <- job
+		p.doHook(HookAdd, job)
+		return
+	}
 }
 
 func (p *Pool) panic() {
@@ -80,12 +67,7 @@ func (p *Pool) panic() {
 	if !p.killed {
 		p.killed = true
 		p.m.Unlock()
-		go func() {
-			for range p.c {
-
-			}
-		}()
-		close(p.k)
+		close(p.Cancel)
 		return
 	}
 	p.m.Unlock()
@@ -132,7 +114,7 @@ func (p *Pool) Worker() {
 					select {
 					case <-d:
 						return
-					case <-p.k:
+					case <-p.Cancel:
 						job.Cancel()
 					}
 				}()
@@ -144,14 +126,14 @@ func (p *Pool) Worker() {
 					return
 				}
 				select {
-				case <-p.k:
+				case <-p.Cancel:
 					return
 				case p.o <- job:
 					close(d)
 					p.doHook(HookDone, job)
 				}
 
-			case <-p.k:
+			case <-p.Cancel:
 				return
 			}
 		}
@@ -165,7 +147,6 @@ func (p *Pool) StartWorkers() {
 	}
 	go func() {
 		p.wg.Wait()
-		//log.Println("Workers complete")
 		close(p.d)
 	}()
 }
@@ -195,8 +176,6 @@ func (p *Pool) Wait() (jobs []PoolJob, e error) {
 		}
 	}
 }
-
-var ErrCancelled = errors.New("Cancelled")
 
 // catchInterrupt launches a new Go routine that sends an error on the e channel when an interrupt signal is caught
 func catchInterrupt(e chan error) {

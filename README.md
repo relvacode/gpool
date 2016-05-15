@@ -2,7 +2,7 @@
 --
     import "github.com/relvacode/gpool"
 
-Pool is a utility for managing a pool of workers
+gPool is a utility for pooling workers
 
 ## Usage
 
@@ -16,11 +16,11 @@ const (
 ```
 
 ```go
-var ErrCancelled = errors.New("Cancelled")
+var ErrClosedPool = errors.New("send on closed pool")
 ```
 
 ```go
-var ErrClosedPool = errors.New("send on closed pool")
+var ErrKilledPool = errors.New("send on killed pool")
 ```
 
 #### type HookFn
@@ -68,28 +68,44 @@ NewPool creates a new Pool with the given worker count
 #### func (*Pool) Close
 
 ```go
-func (p *Pool) Close()
+func (p *Pool) Close() error
 ```
+Close sends a graceful close request to the pool bus. Workers will finish after
+the last submitted job is complete. If the pool is already closed ErrClosedPool.
+
+#### func (*Pool) Kill
+
+```go
+func (p *Pool) Kill() error
+```
+Kill sends a kill request to the pool bus. When sent, any currently running jobs
+have Cancel() called. If the pool has already been killed ErrKilledPool is
+returned.
+
+#### func (*Pool) Notify
+
+```go
+func (p *Pool) Notify(c chan<- struct{})
+```
+Notify will close the given channel when the pool is cancelled
 
 #### func (*Pool) Send
 
 ```go
 func (p *Pool) Send(job PoolJob) error
 ```
-Send sends a given PoolJob to the worker queue
-
-#### func (*Pool) Signal
-
-```go
-func (p *Pool) Signal(c chan struct{})
-```
-Signal will close the given channel when the pool is cancelled
+Send sends the given PoolJob as a request to the pool bus. If the pool has an
+error before call to Send() then that error is returned. If the pool is closed
+the error ErrClosedPool is returned. No error is returned if the Send() was
+successful.
 
 #### func (*Pool) Wait
 
 ```go
-func (p *Pool) Wait() (jobs []PoolJob, e error)
+func (p *Pool) Wait() ([]PoolJob, error)
 ```
+Wait waits for the pool worker group to finish and then returns all jobs
+finished during execution If the pool has an error it is returned here.
 
 #### type PoolError
 
@@ -101,12 +117,6 @@ type PoolError struct {
 ```
 
 PoolError is an error from a particular Job in the pool
-
-#### func  NewPoolError
-
-```go
-func NewPoolError(Job PoolJob, Error error) *PoolError
-```
 
 #### func (PoolError) Error
 
@@ -121,6 +131,7 @@ type PoolJob interface {
 	// Run the job
 	Run() error
 	// Output from the job
+	// May return nil
 	Output() interface{}
 	// A unique identifier
 	Identifier() fmt.Stringer
@@ -147,4 +158,5 @@ that satisfies a PoolJob
 type PoolJobFn func(c chan struct{}) (interface{}, error)
 ```
 
-PoolJobFn is a function that is executed as a pool Job
+PoolJobFn is a function that is executed as a pool Job c is closed when a Kill()
+request is issued.

@@ -8,9 +8,13 @@ gPool is a utility for pooling workers
 
 ```go
 const (
+	// Job completed
 	HookDone = 1 << iota
+	// Job has an error
 	HookError
+	// Job started
 	HookStart
+	// Job added
 	HookAdd
 )
 ```
@@ -37,6 +41,8 @@ HookFn is a function to be called when a Job state triggers a set Pool Hook
 type Identifier string
 ```
 
+Identifier implements String() which can be used as an fmt.Stringer in
+NewPoolJob
 
 #### func (Identifier) String
 
@@ -105,7 +111,7 @@ successful.
 func (p *Pool) Wait() ([]PoolJob, error)
 ```
 Wait waits for the pool worker group to finish and then returns all jobs
-finished during execution If the pool has an error it is returned here.
+completed during execution. If the pool has an error it is returned here.
 
 #### type PoolError
 
@@ -158,5 +164,5 @@ that satisfies a PoolJob
 type PoolJobFn func(c chan struct{}) (interface{}, error)
 ```
 
-PoolJobFn is a function that is executed as a pool Job c is closed when a Kill()
-request is issued.
+PoolJobFn is a function that is executed as a pool Job. c is closed when a
+Kill() request is issued.

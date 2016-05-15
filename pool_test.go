@@ -43,6 +43,6 @@ func Example() {
 	// Close the pool after all messages are sent
 	p.Close()
 
-	// Wait for the pool to finished
+	// Wait for the pool to finish
 	p.Wait()
 }

@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+// Identifier implements String() which can be used as an fmt.Stringer in NewPoolJob
+type Identifier string
+
+func (s Identifier) String() string {
+	return string(s)
+}
+
 // PoolJobFn is a function that is executed as a pool Job
 // c is closed when a Kill() request is issued.
 type PoolJobFn func(c chan struct{}) (interface{}, error)

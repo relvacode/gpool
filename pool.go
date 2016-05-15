@@ -6,12 +6,6 @@ import (
 	"sync"
 )
 
-type Identifier string
-
-func (s Identifier) String() string {
-	return string(s)
-}
-
 var ErrClosedPool = errors.New("send on closed pool")
 var ErrKilledPool = errors.New("send on killed pool")
 
@@ -233,7 +227,7 @@ func (p *Pool) worker() {
 	}
 }
 
-// Wait waits for the pool worker group to finish and then returns all jobs finished during execution
+// Wait waits for the pool worker group to finish and then returns all jobs completed during execution.
 // If the pool has an error it is returned here.
 func (p *Pool) Wait() ([]PoolJob, error) {
 	p.wg.Wait()

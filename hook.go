@@ -1,9 +1,13 @@
 package gpool
 
 const (
+	// Job completed
 	HookDone = 1 << iota
+	// Job has an error
 	HookError
+	// Job started
 	HookStart
+	// Job added
 	HookAdd
 )
 

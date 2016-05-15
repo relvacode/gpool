@@ -23,7 +23,6 @@ type Pool struct {
 	w    int
 	err  error
 	wg   *sync.WaitGroup
-	m    *sync.Mutex
 	Hook struct {
 		Done  HookFn
 		Add   HookFn
@@ -44,7 +43,6 @@ func NewPool(Workers int) *Pool {
 		wR: make(chan PoolJob),
 		wE: make(chan error, Workers),
 		wg: &sync.WaitGroup{},
-		m:  &sync.Mutex{},
 		w:  Workers,
 	}
 	p.start()

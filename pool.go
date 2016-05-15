@@ -1,11 +1,8 @@
-// Pool is a utility for managing a pool of workers
+// gPool is a utility for pooling workers
 package gpool
 
 import (
-	"io"
-	"log"
-	"os"
-	"os/signal"
+	"errors"
 	"sync"
 )
 
@@ -15,19 +12,25 @@ func (s Identifier) String() string {
 	return string(s)
 }
 
-var PoolDone = io.EOF
+var ErrClosedPool = errors.New("send on closed pool")
+var ErrKilledPool = errors.New("send on killed pool")
 
 type Pool struct {
-	c      chan PoolJob
-	d      chan struct{}
-	Cancel chan struct{}
-	e      chan error
-	o      chan PoolJob
-	w      int
-	cw     int // Current workers
-	wg     *sync.WaitGroup
-	m      *sync.Mutex
-	Hook   struct {
+	// Workers
+	wQ chan PoolJob  // Queue
+	wE chan error    // Error
+	wC chan struct{} // Cancel
+	wR chan PoolJob  // Return
+
+	fJ []PoolJob
+
+	tQ chan *ticket // Send ticket requests
+
+	w    int
+	err  error
+	wg   *sync.WaitGroup
+	m    *sync.Mutex
+	Hook struct {
 		Done  HookFn
 		Add   HookFn
 		Start HookFn
@@ -35,42 +38,31 @@ type Pool struct {
 	}
 
 	killed bool
+	closed bool
 }
 
 // NewPool creates a new Pool with the given worker count
 func NewPool(Workers int) *Pool {
-	return &Pool{
-		c:      make(chan PoolJob),
-		d:      make(chan struct{}),
-		Cancel: make(chan struct{}, Workers),
-		o:      make(chan PoolJob),
-		e:      make(chan error, Workers),
-		wg:     &sync.WaitGroup{},
-		m:      &sync.Mutex{},
-		w:      Workers,
+	p := &Pool{
+		tQ: make(chan *ticket),
+		wQ: make(chan PoolJob),
+		wC: make(chan struct{}, Workers),
+		wR: make(chan PoolJob),
+		wE: make(chan error, Workers),
+		wg: &sync.WaitGroup{},
+		m:  &sync.Mutex{},
+		w:  Workers,
 	}
+	p.start()
+	return p
 }
 
-// Send sends a given PoolJob to the worker queue
-func (p *Pool) Send(job PoolJob) {
-	p.m.Lock()
-	defer p.m.Unlock()
-	if p.killed != true {
-		p.c <- job
-		p.doHook(HookAdd, job)
-		return
+func (p *Pool) start() {
+	for range make([]int, p.w) {
+		p.wg.Add(1)
+		go p.worker()
 	}
-}
-
-func (p *Pool) panic() {
-	p.m.Lock()
-	if !p.killed {
-		p.killed = true
-		p.m.Unlock()
-		close(p.Cancel)
-		return
-	}
-	p.m.Unlock()
+	go p.bus()
 }
 
 func call(Fn func(PoolJob), j PoolJob) {
@@ -94,95 +86,156 @@ func (p *Pool) doHook(Method int, Job PoolJob) {
 	}
 }
 
-func (p *Pool) Close() {
-	close(p.c)
-}
-
-func (p *Pool) Worker() {
-	go func() {
-		defer p.wg.Done()
-		for {
-			select {
-			case job, ok := <-p.c:
-				if !ok {
-					return
-				}
-				p.doHook(HookStart, job)
-
-				d := make(chan struct{})
-				go func() {
-					select {
-					case <-d:
-						return
-					case <-p.Cancel:
-						job.Cancel()
-					}
-				}()
-
-				e := job.Run()
-				if e != nil {
-					p.doHook(HookError, job)
-					p.e <- NewPoolError(job, e)
-					return
-				}
-				select {
-				case <-p.Cancel:
-					return
-				case p.o <- job:
-					close(d)
-					p.doHook(HookDone, job)
-				}
-
-			case <-p.Cancel:
-				return
-			}
-		}
-	}()
-}
-
-func (p *Pool) StartWorkers() {
-	for range make([]int, p.w) {
-		p.wg.Add(1)
-		p.Worker()
+// Notify will close the given channel when the pool is cancelled
+func (p *Pool) Notify(c chan<- struct{}) {
+	if c == nil {
+		panic("Cannot close nil channel")
 	}
 	go func() {
-		p.wg.Wait()
-		close(p.d)
+		<-p.wC
+		close(c)
 	}()
 }
 
-func (p *Pool) Wait() (jobs []PoolJob, e error) {
-	catchInterrupt(p.e)
+const (
+	tReqJob int = 1 << iota
+	tReqClose
+	tReqKill
+)
+
+type ticket struct {
+	t int
+	j PoolJob
+	r chan error // Return channel
+}
+
+func (p *Pool) kill() {
+	if !p.killed {
+		p.killed = true
+		close(p.wC)
+	}
+}
+
+// Kill sends a kill request to the pool bus.
+// When sent, any currently running jobs have Cancel() called.
+// If the pool has already been killed ErrKilledPool is returned.
+func (p *Pool) Kill() error {
+	t := &ticket{
+		tReqKill, nil, make(chan error),
+	}
+	p.tQ <- t
+	return <-t.r
+}
+
+// Close sends a graceful close request to the pool bus.
+// Workers will finish after the last submitted job is complete.
+// If the pool is already closed ErrClosedPool.
+func (p *Pool) Close() error {
+	t := &ticket{
+		tReqClose, nil, make(chan error),
+	}
+	p.tQ <- t
+	return <-t.r
+}
+
+// Send sends the given PoolJob as a request to the pool bus.
+// If the pool has an error before call to Send() then that error is returned.
+// If the pool is closed the error ErrClosedPool is returned.
+// No error is returned if the Send() was successful.
+func (p *Pool) Send(job PoolJob) error {
+	t := &ticket{
+		tReqJob, job, make(chan error),
+	}
+	p.tQ <- t
+	return <-t.r
+}
+
+func (p *Pool) bus() {
 	for {
 		select {
-		case j := <-p.o:
-			jobs = append(jobs, j)
-		case err := <-p.e:
-			e = err
-			p.panic()
-			if e == ErrCancelled {
-				log.Println("Shutting down.. signal again to exit")
-				ec := make(chan error)
-				catchInterrupt(ec)
-				select {
-				case <-ec:
-				case <-p.d:
+		case j := <-p.wR:
+			p.fJ = append(p.fJ, j)
+		case e := <-p.wE:
+			p.err = e
+			p.kill()
+		case t := <-p.tQ:
+			switch t.t {
+			case tReqJob:
+				if p.err != nil {
+					t.r <- p.err
+					continue
 				}
+				if !p.killed && !p.closed {
+					p.wQ <- t.j
+					p.doHook(HookAdd, t.j)
+					t.r <- nil
+					continue
+				}
+				t.r <- ErrClosedPool
+			case tReqClose:
+				if !p.closed {
+					p.closed = true
+					close(p.wQ)
+					t.r <- nil
+					continue
+				}
+				t.r <- ErrClosedPool
+			case tReqKill:
+				if !p.killed {
+					p.killed = true
+					close(p.wC)
+					t.r <- nil
+					continue
+				}
+				t.r <- ErrKilledPool
+			}
+
+		}
+
+	}
+}
+
+func (p *Pool) worker() {
+	defer p.wg.Done()
+	for {
+		select {
+		case job, ok := <-p.wQ:
+			if !ok {
 				return
 			}
-			<-p.d
-		case <-p.d:
+			p.doHook(HookStart, job)
+
+			d := make(chan struct{})
+			go func() {
+				select {
+				case <-d:
+					return
+				case <-p.wC:
+					job.Cancel()
+				}
+			}()
+
+			e := job.Run()
+
+			if e != nil {
+				p.doHook(HookError, job)
+				p.wE <- newPoolError(job, e)
+				// Wait for the bus to acknowledge error
+				<-p.wC
+				return
+			}
+			p.wR <- job
+			close(d)
+			p.doHook(HookDone, job)
+		case <-p.wC:
 			return
 		}
 	}
 }
 
-// catchInterrupt launches a new Go routine that sends an error on the e channel when an interrupt signal is caught
-func catchInterrupt(e chan error) {
-	sK := make(chan os.Signal, 1)
-	signal.Notify(sK, os.Interrupt)
-	go func() {
-		<-sK
-		e <- ErrCancelled
-	}()
+// Wait waits for the pool worker group to finish and then returns all jobs finished during execution
+// If the pool has an error it is returned here.
+func (p *Pool) Wait() ([]PoolJob, error) {
+	p.wg.Wait()
+	return p.fJ, p.err
 }

@@ -6,6 +6,7 @@ import (
 )
 
 // PoolJobFn is a function that is executed as a pool Job
+// c is closed when a Kill() request is issued.
 type PoolJobFn func(c chan struct{}) (interface{}, error)
 
 // NewPoolJob creates a interface using the supplied Identifier and Job function that satisfies a PoolJob
@@ -22,6 +23,7 @@ type PoolJob interface {
 	// Run the job
 	Run() error
 	// Output from the job
+	// May return nil
 	Output() interface{}
 	// A unique identifier
 	Identifier() fmt.Stringer

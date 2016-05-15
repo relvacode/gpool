@@ -20,7 +20,7 @@ var ErrCancelled = errors.New("Cancelled")
 ```
 
 ```go
-var PoolDone = io.EOF
+var ErrClosedPool = errors.New("send on closed pool")
 ```
 
 #### type HookFn
@@ -48,8 +48,6 @@ func (s Identifier) String() string
 
 ```go
 type Pool struct {
-	Cancel chan struct{}
-
 	Hook struct {
 		Done  HookFn
 		Add   HookFn
@@ -76,26 +74,21 @@ func (p *Pool) Close()
 #### func (*Pool) Send
 
 ```go
-func (p *Pool) Send(job PoolJob)
+func (p *Pool) Send(job PoolJob) error
 ```
 Send sends a given PoolJob to the worker queue
 
-#### func (*Pool) StartWorkers
+#### func (*Pool) Signal
 
 ```go
-func (p *Pool) StartWorkers()
+func (p *Pool) Signal(c chan struct{})
 ```
+Signal will close the given channel when the pool is cancelled
 
 #### func (*Pool) Wait
 
 ```go
 func (p *Pool) Wait() (jobs []PoolJob, e error)
-```
-
-#### func (*Pool) Worker
-
-```go
-func (p *Pool) Worker()
 ```
 
 #### type PoolError

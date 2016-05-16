@@ -10,8 +10,6 @@ gPool is a utility for pooling workers
 const (
 	// Job completed
 	HookDone = 1 << iota
-	// Job has an error
-	HookError
 	// Job started
 	HookStart
 	// Job added
@@ -30,7 +28,7 @@ var ErrKilledPool = errors.New("send on killed pool")
 #### type HookFn
 
 ```go
-type HookFn func(PoolJob)
+type HookFn func(Job)
 ```
 
 HookFn is a function to be called when a Job state triggers a set Pool Hook
@@ -50,15 +48,64 @@ NewPoolJob
 func (s Identifier) String() string
 ```
 
+#### type Job
+
+```go
+type Job interface {
+	// Run the job
+	Run() error
+	// Output from the job
+	// May return nil
+	Output() interface{}
+	// A unique identifier
+	Identifier() fmt.Stringer
+	// Cancels the job during run
+	Cancel()
+}
+```
+
+A Job is an interface that implements methods for execution on a pool
+
+#### func  NewJob
+
+```go
+func NewJob(Identifier fmt.Stringer, Fn JobFn) Job
+```
+NewJob creates a interface using the supplied Identifier and Job function that
+satisfies a PoolJob
+
+#### type JobFn
+
+```go
+type JobFn func(c chan struct{}) (interface{}, error)
+```
+
+JobFn is a function that is executed as a pool Job. c is closed when a Kill()
+request is issued.
+
+#### type JobResult
+
+```go
+type JobResult struct {
+	ID       int
+	Job      Job
+	Duration time.Duration
+	Error    error
+}
+```
+
+JobResult is the result of an execution in the Pool
+
 #### type Pool
 
 ```go
 type Pool struct {
+
+	// Hooks are functions that are executed during different stages of a Job
 	Hook struct {
 		Done  HookFn
 		Add   HookFn
 		Start HookFn
-		Error HookFn
 	}
 }
 ```
@@ -98,7 +145,7 @@ Notify will close the given channel when the pool is cancelled
 #### func (*Pool) Send
 
 ```go
-func (p *Pool) Send(job PoolJob) error
+func (p *Pool) Send(job Job) error
 ```
 Send sends the given PoolJob as a request to the pool bus. If the pool has an
 error before call to Send() then that error is returned. If the pool is closed
@@ -108,7 +155,7 @@ successful.
 #### func (*Pool) Wait
 
 ```go
-func (p *Pool) Wait() ([]PoolJob, error)
+func (p *Pool) Wait() ([]JobResult, error)
 ```
 Wait waits for the pool worker group to finish and then returns all jobs
 completed during execution. If the pool has an error it is returned here.
@@ -117,8 +164,9 @@ completed during execution. If the pool has an error it is returned here.
 
 ```go
 type PoolError struct {
-	J PoolJob
-	E error
+	ID int
+	J  Job
+	E  error
 }
 ```
 
@@ -129,40 +177,3 @@ PoolError is an error from a particular Job in the pool
 ```go
 func (e PoolError) Error() string
 ```
-
-#### type PoolJob
-
-```go
-type PoolJob interface {
-	// Run the job
-	Run() error
-	// Output from the job
-	// May return nil
-	Output() interface{}
-	// A unique identifier
-	Identifier() fmt.Stringer
-	// Returns the total duration of the job
-	Duration() time.Duration
-	// Cancels the job during run
-	Cancel()
-}
-```
-
-A PoolJob is an interface that implements methods for execution on a pool
-
-#### func  NewPoolJob
-
-```go
-func NewPoolJob(Identifier fmt.Stringer, Fn PoolJobFn) PoolJob
-```
-NewPoolJob creates a interface using the supplied Identifier and Job function
-that satisfies a PoolJob
-
-#### type PoolJobFn
-
-```go
-type PoolJobFn func(c chan struct{}) (interface{}, error)
-```
-
-PoolJobFn is a function that is executed as a pool Job. c is closed when a
-Kill() request is issued.

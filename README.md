@@ -20,10 +20,14 @@ const (
 ```go
 var ErrClosedPool = errors.New("send on closed pool")
 ```
+ErrClosedPool indicates that a send was attempted on a pool which has already
+been closed
 
 ```go
 var ErrKilledPool = errors.New("send on killed pool")
 ```
+ErrKilledPool indicates that a send was attempted on a pool was has been killed
+due to an error
 
 #### type HookFn
 
@@ -116,7 +120,8 @@ type Pool struct {
 ```go
 func NewPool(Workers int) *Pool
 ```
-NewPool creates a new Pool with the given worker count
+NewPool creates a new Pool with the given worker count. Workers in the pool are
+started automatically.
 
 #### func (*Pool) Close
 
@@ -134,13 +139,6 @@ func (p *Pool) Kill() error
 Kill sends a kill request to the pool bus. When sent, any currently running jobs
 have Cancel() called. If the pool has already been killed ErrKilledPool is
 returned.
-
-#### func (*Pool) Notify
-
-```go
-func (p *Pool) Notify(c chan<- struct{})
-```
-Notify will close the given channel when the pool is cancelled
 
 #### func (*Pool) Send
 

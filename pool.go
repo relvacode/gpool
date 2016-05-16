@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
+// ErrClosedPool indicates that a send was attempted on a pool which has already been closed
 var ErrClosedPool = errors.New("send on closed pool")
+
+// ErrKilledPool indicates that a send was attempted on a pool was has been killed due to an error
 var ErrKilledPool = errors.New("send on killed pool")
 
 type Pool struct {
@@ -35,7 +38,8 @@ type Pool struct {
 	closed bool
 }
 
-// NewPool creates a new Pool with the given worker count
+// NewPool creates a new Pool with the given worker count.
+// Workers in the pool are started automatically.
 func NewPool(Workers int) *Pool {
 	p := &Pool{
 		tQ: make(chan ticket),
@@ -49,6 +53,7 @@ func NewPool(Workers int) *Pool {
 	return p
 }
 
+// start starts Pool workers and Pool bus
 func (p *Pool) start() {
 	for range make([]int, p.w) {
 		p.wg.Add(1)
@@ -61,12 +66,14 @@ func (p *Pool) start() {
 	go p.bus()
 }
 
+// call calls a hook if not nil
 func call(Fn func(Job), j Job) {
 	if Fn != nil {
 		Fn(j)
 	}
 }
 
+// doHook calls a registered hook on the supplied Job
 func (p *Pool) doHook(Method int, Job Job) {
 	switch Method {
 	case HookAdd:
@@ -76,19 +83,8 @@ func (p *Pool) doHook(Method int, Job Job) {
 	case HookStart:
 		call(p.Hook.Start, Job)
 	default:
-		panic("Unknown hook method")
+		panic("unknown hook method")
 	}
-}
-
-// Notify will close the given channel when the pool is cancelled
-func (p *Pool) Notify(c chan<- struct{}) {
-	if c == nil {
-		panic("Cannot close nil channel")
-	}
-	go func() {
-		<-p.wC
-		close(c)
-	}()
 }
 
 const (
@@ -98,17 +94,12 @@ const (
 	tReqWait
 )
 
+// A ticket is a request for input in the queue.
+// This prevents direct access to queue channels which reduces the risk of bad things happening.
 type ticket struct {
-	t int
-	j Job
+	t int        // Ticket type
+	j Job        // Job request, used with tReqJob
 	r chan error // Return channel
-}
-
-func (p *Pool) kill() {
-	if !p.killed {
-		p.killed = true
-		close(p.wC)
-	}
 }
 
 // Kill sends a kill request to the pool bus.
@@ -140,8 +131,7 @@ func (p *Pool) Wait() ([]JobResult, error) {
 		tReqWait, nil, make(chan error),
 	}
 	p.tQ <- t
-	e := <-t.r
-	return p.fJ, e
+	return p.fJ, <-t.r
 }
 
 // Send sends the given PoolJob as a request to the pool bus.
@@ -161,6 +151,10 @@ type jobRequest struct {
 	ID  int
 }
 
+// bus is the central communication bus for the pool.
+// All pool inputs are collected here as tickets and then actioned on depending on the ticket type.
+// If the ticket is a tReqWait request they are added to the slice of pending tickets and upon pool closure
+// the ticket return channel is sent any pool errors.
 func (p *Pool) bus() {
 	// Pending tReqWaits
 	pending := []ticket{}
@@ -171,31 +165,42 @@ func (p *Pool) bus() {
 			if !ok {
 				continue
 			}
+			// Kill pool if response contains an error
 			if resp.Error != nil {
 				p.err = resp.Error
-				p.kill()
+				if !p.killed {
+					p.killed = true
+					close(p.wC)
+				}
+				// Else add it to the list of completed jobs
 			} else {
 				p.fJ = append(p.fJ, resp)
 			}
 		// Receive ticket request
 		case t := <-p.tQ:
 			switch t.t {
+			// New Job request
 			case tReqJob:
 				if p.err != nil {
 					t.r <- p.err
 					continue
 				}
-				if !p.killed && !p.closed {
-					p.iJ++
-					p.wQ <- jobRequest{
-						Job: t.j,
-						ID:  p.iJ,
-					}
-					p.doHook(HookAdd, t.j)
-					t.r <- nil
+				if p.killed {
+					t.r <- ErrKilledPool
 					continue
 				}
-				t.r <- ErrClosedPool
+				if p.closed {
+					t.r <- ErrClosedPool
+					continue
+				}
+				p.iJ++
+				p.wQ <- jobRequest{
+					Job: t.j,
+					ID:  p.iJ,
+				}
+				p.doHook(HookAdd, t.j)
+				t.r <- nil
+			// Pool close request
 			case tReqClose:
 				if !p.closed {
 					p.closed = true
@@ -204,6 +209,7 @@ func (p *Pool) bus() {
 					continue
 				}
 				t.r <- ErrClosedPool
+			// Pool kill request
 			case tReqKill:
 				if !p.killed {
 					p.killed = true
@@ -212,9 +218,9 @@ func (p *Pool) bus() {
 					continue
 				}
 				t.r <- ErrKilledPool
+			// Pool wait request
 			case tReqWait:
 				pending = append(pending, t)
-				continue
 			}
 		// Default case resolves any pending tickets
 		default:
@@ -235,6 +241,8 @@ func (p *Pool) bus() {
 	}
 }
 
+// worker is the Pool worker routine that receives jobRequests from the pool worker queue until the queue is closed.
+// It executes the job and returns the result to the worker return channel as a JobResult.
 func (p *Pool) worker() {
 	defer p.wg.Done()
 	for {

@@ -2,5 +2,101 @@
 
 [![Build Status](https://travis-ci.org/relvacode/gpool.svg?branch=master)](https://travis-ci.org/relvacode/gpool)
 
-gPool is a lightweight utility for managing a pool of long-running workers.
-It features error handling and close(), kill() and wait() methods.
+_gPool is a lightweight utility for managing a pool of workers._
+
+## Basic Usage
+```go
+	// Create a Pool with 5 workers.
+	// Workers are started on creation
+	p := NewPool(5)
+
+	// Example JobFn.
+	// After 10 seconds the job will return Hello, World!
+	JobFn := func(c chan struct{}) (interface{}, error) {
+		<-time.After(10 * time.Second)
+		return "Hello, World!", nil
+	}
+	
+	// Create a Job with an Identifier
+	Job := NewJob(
+		Identifier("MyPoolJob"), JobFn,
+	)
+	
+	// Send it to the Pool
+	p.Send(Job)
+
+	// Close the pool after all messages are sent
+	p.Close()
+
+	// Wait for the pool to finish. This will block forever if the pool is not closed.
+	p.Wait()
+```
+### Job
+A Job is a task to execute on the Pool that contains an identifer and a execution function. It can be any interface that satisfies `pool.Job` but can also be used with `pool.NewJob()`.
+
+```go
+// Create an Identifer, this in an interface{} which has a String() string method. 
+// You can use the built in pool.Identifier() for simple strings
+i := pool.Identifier("MyTestJob")
+
+// Create the Job execution function.
+// The job can optionally return an output interface{} and any errors as a result of execution.
+// The c chan will be closed when the Pool is killed, or another job returns a non-nil error.
+fn := func(c chan struct{}) (interface{}, error) {
+  return "Hello, World!", nil
+}
+
+// Finally, create a Job that can be submitted to the pool.
+Job := pool.NewJob(i, fn)
+```
+
+### Hooks
+A Hook is a function that is executed when a Job changes state in the Pool. 
+Hooks are entirely optional and should not contain any real computation, primarily they should be used for logging.
+
+```go
+p := pool.NewPool(1)
+p.Hook.Add = function(j pool.Job) {
+  log.Println("Started", j.Identifier())
+}
+```
+
+### Identifier
+An Identifier is a interface{} that has a `String() string` method. This is used to give Jobs a name but can also contain more advanced information via type assertion.
+
+```go
+// Create you custom Identifer struct{}
+type CopyIdentifier struct {
+  Name string
+  Source, Dest string
+}
+
+// Implement String() string
+func (c *CopyIdentifier) String() string {
+  return c.Name
+}
+
+// Example Job
+fn := func(c chan struct{}) (interface{}, error) {
+  return "Hello, World!", nil
+}
+
+// Initialise your custom Identifier with some data
+i := &CopyIdentifier{
+  Name:   "Copy file.txt",
+  Source: "/src/file.txt",
+  Dest:   "/dst/file.txt",
+}
+Job := pool.NewJob(i, fn)
+
+p := pool.NewPool(5)
+
+// Add a Pool Hook
+p.Hook.Add = func(j pool.Job) {
+  // Check if the Idenitifer is a *CopyIdentifier. If so then print the source and destination.
+  if i, ok :=  j.Identifier().(*CopyIdentifier); ok {
+    log.Println("Copy", i.Source, "to", i.Dest) // Outputs: Copy /src/file.txt to /dst/file.txt
+  }
+}
+
+```

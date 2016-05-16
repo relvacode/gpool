@@ -4,7 +4,7 @@
 
 _gPool is a lightweight utility for managing a pool of workers._
 
-`import "github.com/relvacode/gpool`
+`import "github.com/relvacode/gpool"`
 
 ## Basic Usage
 ```go
@@ -31,7 +31,9 @@ _gPool is a lightweight utility for managing a pool of workers._
 	p.Close()
 
 	// Wait for the pool to finish. This will block forever if the pool is not closed.
-	p.Wait()
+	jobs, e := p.Wait()
+	// e is any error that occured within the Pool
+	// jobs is a slice of JobResults of all completed Jobs
 ```
 ### Job
 A Job is a task to execute on the Pool that contains an identifer and a execution function. It can be any interface that satisfies `gpool.Job` but can also be used with `gpool.NewJob()`.

@@ -27,9 +27,8 @@ type Pool struct {
 	wg  *sync.WaitGroup
 	// Hooks are functions that are executed during different stages of a Job
 	Hook struct {
-		Done  HookFn
-		Add   HookFn
-		Start HookFn
+		Start HookStart
+		Stop  HookStop
 	}
 
 	closed bool
@@ -63,27 +62,6 @@ func (p *Pool) start() {
 		p.wD <- true
 	}()
 	go p.bus()
-}
-
-// call calls a hook if not nil
-func call(Fn func(Job), j Job) {
-	if Fn != nil {
-		Fn(j)
-	}
-}
-
-// doHook calls a registered hook on the supplied Job
-func (p *Pool) doHook(Method int, Job Job) {
-	switch Method {
-	case HookAdd:
-		call(p.Hook.Add, Job)
-	case HookDone:
-		call(p.Hook.Done, Job)
-	case HookStart:
-		call(p.Hook.Start, Job)
-	default:
-		panic("unknown hook method")
-	}
 }
 
 const (
@@ -235,7 +213,6 @@ func (p *Pool) bus() {
 					ID:  p.iJ,
 					Job: t.j,
 				})
-				p.doHook(HookAdd, t.j)
 				t.r <- nil
 			// Pool close request
 			case tReqClose:
@@ -295,7 +272,6 @@ func (p *Pool) worker() {
 			if !ok {
 				return
 			}
-			p.doHook(HookStart, req.Job)
 
 			d := make(chan struct{})
 			go func() {
@@ -307,21 +283,26 @@ func (p *Pool) worker() {
 				}
 			}()
 
+			if p.Hook.Start != nil {
+				p.Hook.Start(req.ID, req.Job)
+			}
+
 			s := time.Now()
 			e := req.Job.Run()
-
+			close(d)
 			if e != nil {
 				e = newPoolError(&req, e)
 			}
-			p.wR <- JobResult{
+			j := JobResult{
 				Job:      req.Job,
 				ID:       req.ID,
 				Duration: time.Since(s),
 				Error:    e,
 			}
-			close(d)
-			if e != nil {
-				p.doHook(HookDone, req.Job)
+			p.wR <- j
+
+			if p.Hook.Stop != nil {
+				p.Hook.Stop(req.ID, j)
 			}
 		case <-p.wC:
 			return

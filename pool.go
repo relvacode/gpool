@@ -69,6 +69,7 @@ const (
 	tReqKill
 	tReqWait
 	tReqIsOpen
+	tReqHasError
 )
 
 // A ticket is a request for input in the queue.
@@ -81,7 +82,7 @@ type ticket struct {
 
 // Kill sends a kill request to the pool bus.
 // When sent, any currently running jobs have Cancel() called.
-// If the pool has already been killed ErrKilledPool is returned.
+// If the pool has already been killed or closed ErrClosedPool is returned.
 func (p *Pool) Kill() error {
 	t := ticket{
 		tReqKill, nil, make(chan error),
@@ -103,6 +104,10 @@ func (p *Pool) Close() error {
 
 // Wait waits for the pool worker group to finish and then returns all jobs completed during execution.
 // If the pool has an error it is returned here.
+// Wait will block until the pool is marked as done (via call to Pool.Close) or has an error.
+// As such it is important that the caller either implements a timeout around Wait,
+// or ensures a call to Pool.Close will be made.
+// Wait requests are stacked until they can be resolved in the next bus cycle.
 func (p *Pool) Wait() ([]JobResult, error) {
 	t := ticket{
 		tReqWait, nil, make(chan error),
@@ -112,7 +117,6 @@ func (p *Pool) Wait() ([]JobResult, error) {
 }
 
 // Send sends the given PoolJob as a request to the pool bus.
-// If the pool has an error before call to Send() then that error is returned.
 // If the pool is closed the error ErrClosedPool is returned.
 // No error is returned if the Send() was successful.
 func (p *Pool) Send(job Job) error {
@@ -123,8 +127,7 @@ func (p *Pool) Send(job Job) error {
 	return <-t.r
 }
 
-// IsOpen sends a request to the pool bus to request if the pool is open or not.
-// Returns true if the pool is open.
+// IsOpen returns true if the pool is currently open.
 func (p *Pool) IsOpen() bool {
 	t := ticket{
 		tReqIsOpen, nil, make(chan error),
@@ -137,7 +140,16 @@ func (p *Pool) IsOpen() bool {
 	return false
 }
 
-// Running returns the current amount of running workers and the amount of requested workers
+// Error returns the current error present in the pool.
+func (p *Pool) Error() error {
+	t := ticket{
+		tReqHasError, nil, make(chan error),
+	}
+	p.tQ <- t
+	return <-t.r
+}
+
+// Running returns the current amount of running workers and the amount of requested workers.
 func (p *Pool) Running() (c int, t int) {
 	return p.s.State()
 }
@@ -204,10 +216,6 @@ func (p *Pool) bus() {
 			switch t.t {
 			// New Job request
 			case tReqJob:
-				if p.err != nil {
-					t.r <- p.err
-					continue
-				}
 				if p.closed || p.done {
 					t.r <- ErrClosedPool
 					continue
@@ -246,6 +254,8 @@ func (p *Pool) bus() {
 					continue
 				}
 				t.r <- nil
+			case tReqHasError:
+				t.r <- p.err
 			}
 		// Default case resolves any pending tickets
 		default:

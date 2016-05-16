@@ -133,3 +133,34 @@ func Example() {
 	// Wait for the pool to finish
 	p.Wait()
 }
+
+func doBenchMarkSubmit(b *testing.B, Workers int, N int) {
+	p := NewPool(Workers)
+	j := NewJob(Identifier("Benchmark"), func(c chan struct{}) (interface{}, error) {
+		return nil, nil
+	})
+	b.ResetTimer()
+	for i := 0; i < N; i++ {
+		e := p.Send(j)
+		if e != nil {
+			b.Fatal(e)
+		}
+	}
+	p.Close()
+	_, e := p.Wait()
+	if e != nil {
+		b.Fatal(e)
+	}
+}
+
+func BenchmarkSubmit_1(b *testing.B) {
+	doBenchMarkSubmit(b, 1, b.N)
+}
+
+func BenchmarkSubmit_10(b *testing.B) {
+	doBenchMarkSubmit(b, 10, b.N)
+}
+
+func BenchmarkSubmit_100(b *testing.B) {
+	doBenchMarkSubmit(b, 100, b.N)
+}

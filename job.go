@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+// HookStart is a function to be called when a Job starts.
+type HookStart func(ID int, j Job)
+
+// HookStop is a function to be called when a Job finishes.
+type HookStop func(ID int, res JobResult)
+
 // Identifier implements String() which can be used as an fmt.Stringer in NewPoolJob
 type Identifier string
 

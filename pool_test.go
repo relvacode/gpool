@@ -6,13 +6,21 @@ import (
 	"time"
 )
 
+var failJob = func(c chan struct{}) (interface{}, error) {
+	return nil, fmt.Errorf("Test error function")
+}
+
+var goodJob = func(c chan struct{}) (interface{}, error) {
+	return nil, nil
+}
+
 func Test_Pool_JobError(t *testing.T) {
 	p := NewPool(1)
-	p.Send(NewPoolJob(Identifier("Testing"),
-		func(c chan struct{}) (interface{}, error) {
-			return nil, fmt.Errorf("Test error function")
-		},
-	))
+	p.Send(NewJob(Identifier("Testing"), failJob))
+	e := p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
 	j, e := p.Wait()
 	if e == nil {
 		t.Fatal("Nil error")
@@ -20,6 +28,28 @@ func Test_Pool_JobError(t *testing.T) {
 	t.Log(e)
 	if len(j) > 0 {
 		t.Fatal("Job present in completed jobs")
+	}
+}
+
+func Test_JobResultID(t *testing.T) {
+	p := NewPool(1)
+	p.Send(NewJob(Identifier("Testing"), goodJob))
+	p.Send(NewJob(Identifier("Testing"), goodJob))
+	e := p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	j, e := p.Wait()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(j) != 2 {
+		t.Fatal("not enough jobs, wanted 2 got", len(j))
+	}
+	for i, v := range j {
+		if i+1 != v.ID {
+			t.Fatal("wrong ID, wanted", i+1, "got", v.ID)
+		}
 	}
 }
 
@@ -34,7 +64,7 @@ func Example() {
 		return "Hello, World!", nil
 	}
 	// Create a Job with an Identifier
-	Job := NewPoolJob(
+	Job := NewJob(
 		Identifier("MyPoolJob"), JobFn,
 	)
 	// Send it to the Pool

@@ -103,6 +103,13 @@ func Test_Pool_IsOpen(t *testing.T) {
 	}
 }
 
+func Test_Pool_NRunning(t *testing.T) {
+	p := NewPool(2)
+	if c, _ := p.Running(); c != 2 {
+		t.Fatal("wanted 2 workers, got", c)
+	}
+}
+
 func Example() {
 	// Create a Pool with 5 workers
 	p := NewPool(5)

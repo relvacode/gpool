@@ -8,7 +8,7 @@ _gPool is a lightweight utility for managing a pool of workers._
 ```go
 	// Create a Pool with 5 workers.
 	// Workers are started on creation
-	p := NewPool(5)
+	p := pool.NewPool(5)
 
 	// Example JobFn.
 	// After 10 seconds the job will return Hello, World!
@@ -18,7 +18,7 @@ _gPool is a lightweight utility for managing a pool of workers._
 	}
 	
 	// Create a Job with an Identifier
-	Job := NewJob(
+	Job := pool.NewJob(
 		Identifier("MyPoolJob"), JobFn,
 	)
 	
@@ -48,6 +48,24 @@ fn := func(c chan struct{}) (interface{}, error) {
 
 // Finally, create a Job that can be submitted to the pool.
 Job := pool.NewJob(i, fn)
+```
+
+#### Cancel
+Jobs can be cancelled during execution via a channel closer.
+The execution function is given a channel which will be closed when a call to `Pool.Kill()` is made or another Job in the pool returns an error.
+A call to `Pool.Wait()` will not continue until Jobs in the Pool have completed, so it's important for especially long-running Jobs to be able to receive and action this signal in reasonable time.
+
+```go
+fn := func(c chan struct{}) (interface{}, error) {
+  select {
+  case <-c:
+    // Cancel signal received, exit without doing anything
+    return nil, nil
+  case <-time.After(10*time.Second):
+    // After a 10 second timeout if no cancel signal is received then return "Hello, World!"
+    return "Hello, World!", nil
+  }
+}
 ```
 
 ### Hooks

@@ -10,14 +10,12 @@ import (
 // ErrClosedPool indicates that a send was attempted on a pool which has already been closed
 var ErrClosedPool = errors.New("send on closed pool")
 
-// ErrKilledPool indicates that a send was attempted on a pool was has been killed due to an error
-var ErrKilledPool = errors.New("send on killed pool")
-
 type Pool struct {
 	// Workers
 	wQ chan jobRequest // Queue
 	wR chan JobResult  // Return
 	wC chan struct{}   // Cancel
+	wD chan bool       // Done
 
 	fJ []JobResult
 	iJ int // Job id
@@ -34,8 +32,8 @@ type Pool struct {
 		Start HookFn
 	}
 
-	killed bool
 	closed bool
+	done   bool
 }
 
 // NewPool creates a new Pool with the given worker count.
@@ -44,8 +42,9 @@ func NewPool(Workers int) *Pool {
 	p := &Pool{
 		tQ: make(chan ticket),
 		wQ: make(chan jobRequest),
-		wC: make(chan struct{}, Workers),
+		wC: make(chan struct{}),
 		wR: make(chan JobResult),
+		wD: make(chan bool),
 		wg: &sync.WaitGroup{},
 		w:  Workers,
 	}
@@ -61,7 +60,7 @@ func (p *Pool) start() {
 	}
 	go func() {
 		p.wg.Wait()
-		close(p.wR)
+		p.wD <- true
 	}()
 	go p.bus()
 }
@@ -92,6 +91,7 @@ const (
 	tReqClose
 	tReqKill
 	tReqWait
+	tReqIsOpen
 )
 
 // A ticket is a request for input in the queue.
@@ -115,7 +115,7 @@ func (p *Pool) Kill() error {
 
 // Close sends a graceful close request to the pool bus.
 // Workers will finish after the last submitted job is complete.
-// If the pool is already closed ErrClosedPool.
+// Close does not return an error if the pool is already closed.
 func (p *Pool) Close() error {
 	t := ticket{
 		tReqClose, nil, make(chan error),
@@ -146,9 +146,60 @@ func (p *Pool) Send(job Job) error {
 	return <-t.r
 }
 
+// IsOpen sends a request to the pool bus to request if the pool is open or not.
+// Returns true if the pool is open.
+func (p *Pool) IsOpen() bool {
+	t := ticket{
+		tReqIsOpen, nil, make(chan error),
+	}
+	p.tQ <- t
+	e := <-t.r
+	if e == nil {
+		return true
+	}
+	return false
+}
+
 type jobRequest struct {
 	Job Job
 	ID  int
+}
+
+// close closes the pool if not already closed.
+// Returns true if the pool was closed.
+func (p *Pool) close(kill bool) bool {
+	if !p.closed {
+		p.closed = true
+		close(p.wQ)
+		if kill {
+			close(p.wC)
+		}
+		return true
+	}
+	return false
+}
+
+// res receives a JobResult and processes it.
+func (p *Pool) res(resp JobResult) {
+	if resp.Error != nil {
+		p.err = resp.Error
+		p.close(true)
+		return
+	}
+	p.fJ = append(p.fJ, resp)
+}
+
+// doSend tries to send a jobRequest to the worker pool.
+// If the pool is full a deadlock is possible unless we also collect the return message from the workers
+func (p *Pool) doSend(r jobRequest) {
+	for {
+		select {
+		case p.wQ <- r:
+			return
+		case resp := <-p.wR:
+			p.res(resp)
+		}
+	}
 }
 
 // bus is the central communication bus for the pool.
@@ -160,22 +211,12 @@ func (p *Pool) bus() {
 	pending := []ticket{}
 	for {
 		select {
+		case <-p.wD:
+			p.close(false)
+			p.done = true
 		// Receive worker response
-		case resp, ok := <-p.wR:
-			if !ok {
-				continue
-			}
-			// Kill pool if response contains an error
-			if resp.Error != nil {
-				p.err = resp.Error
-				if !p.killed {
-					p.killed = true
-					close(p.wC)
-				}
-				// Else add it to the list of completed jobs
-			} else {
-				p.fJ = append(p.fJ, resp)
-			}
+		case resp := <-p.wR:
+			p.res(resp)
 		// Receive ticket request
 		case t := <-p.tQ:
 			switch t.t {
@@ -185,46 +226,49 @@ func (p *Pool) bus() {
 					t.r <- p.err
 					continue
 				}
-				if p.killed {
-					t.r <- ErrKilledPool
-					continue
-				}
-				if p.closed {
+				if p.closed || p.done {
 					t.r <- ErrClosedPool
 					continue
 				}
 				p.iJ++
-				p.wQ <- jobRequest{
-					Job: t.j,
+				p.doSend(jobRequest{
 					ID:  p.iJ,
-				}
+					Job: t.j,
+				})
 				p.doHook(HookAdd, t.j)
 				t.r <- nil
 			// Pool close request
 			case tReqClose:
-				if !p.closed {
-					p.closed = true
-					close(p.wQ)
-					t.r <- nil
+				if p.done {
 					continue
 				}
-				t.r <- ErrClosedPool
+				p.close(false)
+				t.r <- nil
 			// Pool kill request
 			case tReqKill:
-				if !p.killed {
-					p.killed = true
-					close(p.wC)
-					t.r <- nil
+				if p.done {
+					t.r <- ErrClosedPool
 					continue
 				}
-				t.r <- ErrKilledPool
+				if ok := p.close(true); ok {
+					t.r <- nil
+				} else {
+					t.r <- ErrClosedPool
+				}
 			// Pool wait request
 			case tReqWait:
 				pending = append(pending, t)
+			// Pool is open request
+			case tReqIsOpen:
+				if p.done || p.err != nil || p.closed {
+					t.r <- ErrClosedPool
+					continue
+				}
+				t.r <- nil
 			}
 		// Default case resolves any pending tickets
 		default:
-			if p.closed || p.killed {
+			if p.done && len(pending) != 0 {
 				// Pop every item in pending and send return signal to ticket
 				for {
 					if len(pending) == 0 {

@@ -31,7 +31,7 @@ func Test_Pool_JobError(t *testing.T) {
 	}
 }
 
-func Test_JobResultID(t *testing.T) {
+func Test_Pool_JobResultID(t *testing.T) {
 	p := NewPool(1)
 	p.Send(NewJob(Identifier("Testing"), goodJob))
 	p.Send(NewJob(Identifier("Testing"), goodJob))
@@ -50,6 +50,56 @@ func Test_JobResultID(t *testing.T) {
 		if i+1 != v.ID {
 			t.Fatal("wrong ID, wanted", i+1, "got", v.ID)
 		}
+	}
+}
+
+func Test_Pool_JobMany_40(t *testing.T) {
+	p := NewPool(3)
+	for range make([]int, 40) {
+		p.Send(NewJob(Identifier("Testing"), goodJob))
+	}
+	e := p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	j, e := p.Wait()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(j) != 40 {
+		t.Fatal("not enough jobs, wanted 40 got", len(j))
+	}
+}
+
+func Test_Pool_JobMany_1(t *testing.T) {
+	p := NewPool(1)
+	for range make([]int, 40) {
+		p.Send(NewJob(Identifier("Testing"), goodJob))
+	}
+	e := p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	j, e := p.Wait()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if len(j) != 40 {
+		t.Fatal("not enough jobs, wanted 40 got", len(j))
+	}
+}
+
+func Test_Pool_IsOpen(t *testing.T) {
+	p := NewPool(1)
+	if ok := p.IsOpen(); !ok {
+		t.Fatal("pool unexpectedly closed")
+	}
+	e := p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if ok := p.IsOpen(); ok {
+		t.Fatal("pool not closed")
 	}
 }
 

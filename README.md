@@ -8,7 +8,7 @@ _gPool is a lightweight utility for managing a pool of workers._
 ```go
 	// Create a Pool with 5 workers.
 	// Workers are started on creation
-	p := pool.NewPool(5)
+	p := gpool.NewPool(5)
 
 	// Example JobFn.
 	// After 10 seconds the job will return Hello, World!
@@ -18,7 +18,7 @@ _gPool is a lightweight utility for managing a pool of workers._
 	}
 	
 	// Create a Job with an Identifier
-	Job := pool.NewJob(
+	Job := gpool.NewJob(
 		Identifier("MyPoolJob"), JobFn,
 	)
 	
@@ -32,12 +32,12 @@ _gPool is a lightweight utility for managing a pool of workers._
 	p.Wait()
 ```
 ### Job
-A Job is a task to execute on the Pool that contains an identifer and a execution function. It can be any interface that satisfies `pool.Job` but can also be used with `pool.NewJob()`.
+A Job is a task to execute on the Pool that contains an identifer and a execution function. It can be any interface that satisfies `gpool.Job` but can also be used with `gpool.NewJob()`.
 
 ```go
 // Create an Identifer, this in an interface{} which has a String() string method. 
 // You can use the built in pool.Identifier() for simple strings
-i := pool.Identifier("MyTestJob")
+i := gpool.Identifier("MyTestJob")
 
 // Create the Job execution function.
 // The job can optionally return an output interface{} and any errors as a result of execution.
@@ -47,7 +47,7 @@ fn := func(c chan struct{}) (interface{}, error) {
 }
 
 // Finally, create a Job that can be submitted to the pool.
-Job := pool.NewJob(i, fn)
+Job := gpool.NewJob(i, fn)
 ```
 
 #### Cancel
@@ -73,8 +73,8 @@ A Hook is a function that is executed when a Job changes state in the Pool.
 Hooks are entirely optional and should not contain any real computation, primarily they should be used for logging.
 
 ```go
-p := pool.NewPool(1)
-p.Hook.Add = function(j pool.Job) {
+p := gpool.NewPool(1)
+p.Hook.Add = function(j gpool.Job) {
   log.Println("Started", j.Identifier())
 }
 ```
@@ -105,12 +105,12 @@ i := &CopyIdentifier{
   Source: "/src/file.txt",
   Dest:   "/dst/file.txt",
 }
-Job := pool.NewJob(i, fn)
+Job := gpool.NewJob(i, fn)
 
-p := pool.NewPool(5)
+p := gpool.NewPool(5)
 
 // Add a Pool Hook
-p.Hook.Add = func(j pool.Job) {
+p.Hook.Add = func(j gpool.Job) {
   // Check if the Idenitifer is a *CopyIdentifier. If so then print the source and destination.
   if i, ok :=  j.Identifier().(*CopyIdentifier); ok {
     log.Println("Copy", i.Source, "to", i.Dest) // Outputs: Copy /src/file.txt to /dst/file.txt

@@ -6,6 +6,8 @@ _gPool is a lightweight utility for managing a pool of workers._
 
 `import "github.com/relvacode/gpool"`
 
+[__API Reference__](https://godoc.org/github.com/relvacode/gpool)
+
 ## Basic Usage
 ```go
 	// Create a Pool with 5 workers.

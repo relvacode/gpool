@@ -4,6 +4,7 @@ package gpool
 import (
 	"errors"
 	"sync"
+	"time"
 )
 
 var ErrClosedPool = errors.New("send on closed pool")
@@ -11,23 +12,23 @@ var ErrKilledPool = errors.New("send on killed pool")
 
 type Pool struct {
 	// Workers
-	wQ chan PoolJob  // Queue
-	wE chan error    // Error
-	wC chan struct{} // Cancel
-	wR chan PoolJob  // Return
+	wQ chan jobRequest // Queue
+	wR chan JobResult  // Return
+	wC chan struct{}   // Cancel
 
-	fJ []PoolJob
+	fJ []JobResult
+	iJ int // Job id
 
-	tQ chan *ticket // Send ticket requests
+	tQ chan ticket // Send ticket requests
 
-	w    int
-	err  error
-	wg   *sync.WaitGroup
+	w   int
+	err error
+	wg  *sync.WaitGroup
+	// Hooks are functions that are executed during different stages of a Job
 	Hook struct {
 		Done  HookFn
 		Add   HookFn
 		Start HookFn
-		Error HookFn
 	}
 
 	killed bool
@@ -37,11 +38,10 @@ type Pool struct {
 // NewPool creates a new Pool with the given worker count
 func NewPool(Workers int) *Pool {
 	p := &Pool{
-		tQ: make(chan *ticket),
-		wQ: make(chan PoolJob),
+		tQ: make(chan ticket),
+		wQ: make(chan jobRequest),
 		wC: make(chan struct{}, Workers),
-		wR: make(chan PoolJob),
-		wE: make(chan error, Workers),
+		wR: make(chan JobResult),
 		wg: &sync.WaitGroup{},
 		w:  Workers,
 	}
@@ -54,16 +54,20 @@ func (p *Pool) start() {
 		p.wg.Add(1)
 		go p.worker()
 	}
+	go func() {
+		p.wg.Wait()
+		close(p.wR)
+	}()
 	go p.bus()
 }
 
-func call(Fn func(PoolJob), j PoolJob) {
+func call(Fn func(Job), j Job) {
 	if Fn != nil {
 		Fn(j)
 	}
 }
 
-func (p *Pool) doHook(Method int, Job PoolJob) {
+func (p *Pool) doHook(Method int, Job Job) {
 	switch Method {
 	case HookAdd:
 		call(p.Hook.Add, Job)
@@ -71,8 +75,6 @@ func (p *Pool) doHook(Method int, Job PoolJob) {
 		call(p.Hook.Done, Job)
 	case HookStart:
 		call(p.Hook.Start, Job)
-	case HookError:
-		call(p.Hook.Error, Job)
 	default:
 		panic("Unknown hook method")
 	}
@@ -93,11 +95,12 @@ const (
 	tReqJob int = 1 << iota
 	tReqClose
 	tReqKill
+	tReqWait
 )
 
 type ticket struct {
 	t int
-	j PoolJob
+	j Job
 	r chan error // Return channel
 }
 
@@ -112,7 +115,7 @@ func (p *Pool) kill() {
 // When sent, any currently running jobs have Cancel() called.
 // If the pool has already been killed ErrKilledPool is returned.
 func (p *Pool) Kill() error {
-	t := &ticket{
+	t := ticket{
 		tReqKill, nil, make(chan error),
 	}
 	p.tQ <- t
@@ -123,33 +126,58 @@ func (p *Pool) Kill() error {
 // Workers will finish after the last submitted job is complete.
 // If the pool is already closed ErrClosedPool.
 func (p *Pool) Close() error {
-	t := &ticket{
+	t := ticket{
 		tReqClose, nil, make(chan error),
 	}
 	p.tQ <- t
 	return <-t.r
 }
 
+// Wait waits for the pool worker group to finish and then returns all jobs completed during execution.
+// If the pool has an error it is returned here.
+func (p *Pool) Wait() ([]JobResult, error) {
+	t := ticket{
+		tReqWait, nil, make(chan error),
+	}
+	p.tQ <- t
+	e := <-t.r
+	return p.fJ, e
+}
+
 // Send sends the given PoolJob as a request to the pool bus.
 // If the pool has an error before call to Send() then that error is returned.
 // If the pool is closed the error ErrClosedPool is returned.
 // No error is returned if the Send() was successful.
-func (p *Pool) Send(job PoolJob) error {
-	t := &ticket{
+func (p *Pool) Send(job Job) error {
+	t := ticket{
 		tReqJob, job, make(chan error),
 	}
 	p.tQ <- t
 	return <-t.r
 }
 
+type jobRequest struct {
+	Job Job
+	ID  int
+}
+
 func (p *Pool) bus() {
+	// Pending tReqWaits
+	pending := []ticket{}
 	for {
 		select {
-		case j := <-p.wR:
-			p.fJ = append(p.fJ, j)
-		case e := <-p.wE:
-			p.err = e
-			p.kill()
+		// Receive worker response
+		case resp, ok := <-p.wR:
+			if !ok {
+				continue
+			}
+			if resp.Error != nil {
+				p.err = resp.Error
+				p.kill()
+			} else {
+				p.fJ = append(p.fJ, resp)
+			}
+		// Receive ticket request
 		case t := <-p.tQ:
 			switch t.t {
 			case tReqJob:
@@ -158,7 +186,11 @@ func (p *Pool) bus() {
 					continue
 				}
 				if !p.killed && !p.closed {
-					p.wQ <- t.j
+					p.iJ++
+					p.wQ <- jobRequest{
+						Job: t.j,
+						ID:  p.iJ,
+					}
 					p.doHook(HookAdd, t.j)
 					t.r <- nil
 					continue
@@ -180,6 +212,22 @@ func (p *Pool) bus() {
 					continue
 				}
 				t.r <- ErrKilledPool
+			case tReqWait:
+				pending = append(pending, t)
+				continue
+			}
+		// Default case resolves any pending tickets
+		default:
+			if p.closed || p.killed {
+				// Pop every item in pending and send return signal to ticket
+				for {
+					if len(pending) == 0 {
+						break
+					}
+					var t ticket
+					t, pending = pending[len(pending)-1], pending[:len(pending)-1]
+					t.r <- p.err
+				}
 			}
 
 		}
@@ -191,11 +239,11 @@ func (p *Pool) worker() {
 	defer p.wg.Done()
 	for {
 		select {
-		case job, ok := <-p.wQ:
+		case req, ok := <-p.wQ:
 			if !ok {
 				return
 			}
-			p.doHook(HookStart, job)
+			p.doHook(HookStart, req.Job)
 
 			d := make(chan struct{})
 			go func() {
@@ -203,31 +251,28 @@ func (p *Pool) worker() {
 				case <-d:
 					return
 				case <-p.wC:
-					job.Cancel()
+					req.Job.Cancel()
 				}
 			}()
 
-			e := job.Run()
+			s := time.Now()
+			e := req.Job.Run()
 
 			if e != nil {
-				p.doHook(HookError, job)
-				p.wE <- newPoolError(job, e)
-				// Wait for the bus to acknowledge error
-				<-p.wC
-				return
+				e = newPoolError(&req, e)
 			}
-			p.wR <- job
+			p.wR <- JobResult{
+				Job:      req.Job,
+				ID:       req.ID,
+				Duration: time.Since(s),
+				Error:    e,
+			}
 			close(d)
-			p.doHook(HookDone, job)
+			if e != nil {
+				p.doHook(HookDone, req.Job)
+			}
 		case <-p.wC:
 			return
 		}
 	}
-}
-
-// Wait waits for the pool worker group to finish and then returns all jobs completed during execution.
-// If the pool has an error it is returned here.
-func (p *Pool) Wait() ([]PoolJob, error) {
-	p.wg.Wait()
-	return p.fJ, p.err
 }

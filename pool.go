@@ -22,7 +22,7 @@ type Pool struct {
 
 	tQ chan ticket // Send ticket requests
 
-	w   int
+	s   *stateManager
 	err error
 	wg  *sync.WaitGroup
 	// Hooks are functions that are executed during different stages of a Job
@@ -45,7 +45,7 @@ func NewPool(Workers int) *Pool {
 		wR: make(chan JobResult),
 		wD: make(chan bool),
 		wg: &sync.WaitGroup{},
-		w:  Workers,
+		s:  newStateManager(Workers),
 	}
 	p.start()
 	return p
@@ -53,9 +53,8 @@ func NewPool(Workers int) *Pool {
 
 // start starts Pool workers and Pool bus
 func (p *Pool) start() {
-	for range make([]int, p.w) {
-		p.wg.Add(1)
-		go p.worker()
+	for range make([]int, p.s.GetTarget()) {
+		p.startWorker()
 	}
 	go func() {
 		p.wg.Wait()
@@ -75,9 +74,9 @@ const (
 // A ticket is a request for input in the queue.
 // This prevents direct access to queue channels which reduces the risk of bad things happening.
 type ticket struct {
-	t int        // Ticket type
-	j Job        // Job request, used with tReqJob
-	r chan error // Return channel
+	t    int         // Ticket type
+	data interface{} // Ticket request data
+	r    chan error  // Return channel
 }
 
 // Kill sends a kill request to the pool bus.
@@ -136,6 +135,11 @@ func (p *Pool) IsOpen() bool {
 		return true
 	}
 	return false
+}
+
+// Running returns the current amount of running workers and the amount of requested workers
+func (p *Pool) Running() (c int, t int) {
+	return p.s.State()
 }
 
 type jobRequest struct {
@@ -211,7 +215,7 @@ func (p *Pool) bus() {
 				p.iJ++
 				p.doSend(jobRequest{
 					ID:  p.iJ,
-					Job: t.j,
+					Job: t.data.(Job),
 				})
 				t.r <- nil
 			// Pool close request
@@ -262,10 +266,22 @@ func (p *Pool) bus() {
 	}
 }
 
+// startWorker starts a worker and waits for it to complete starting before return.
+// This prevents a race condition on call to Pool.Running() where the worker may not have completed it's state registration.
+func (p *Pool) startWorker() {
+	ok := make(chan bool)
+	p.wg.Add(1)
+	go p.worker(ok)
+	<-ok
+}
+
 // worker is the Pool worker routine that receives jobRequests from the pool worker queue until the queue is closed.
 // It executes the job and returns the result to the worker return channel as a JobResult.
-func (p *Pool) worker() {
+func (p *Pool) worker(started chan bool) {
 	defer p.wg.Done()
+	p.s.Add()
+	defer p.s.Remove()
+	close(started)
 	for {
 		select {
 		case req, ok := <-p.wQ:

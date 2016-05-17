@@ -20,10 +20,10 @@ func (s Identifier) String() string {
 
 // JobResult is the result of an execution in the Pool
 type JobResult struct {
-	ID       int
-	Job      Job
-	Duration time.Duration
-	Error    error
+	ID       int           // Unique Job ID
+	Job      Job           // Underlying Job
+	Duration time.Duration // Execution duration
+	Error    error         // Wrapped PoolError containing the underlying error from Job.Run()
 }
 
 // JobFn is a function that is executed as a pool Job.

@@ -140,54 +140,6 @@ func Test_Pool_NRunning(t *testing.T) {
 	}
 }
 
-func Test_Pool_StreamInto(t *testing.T) {
-	p := NewPool(1)
-
-	ret := make(chan JobResult)
-	e := p.StreamResultsInto(ret)
-	if e != nil {
-		t.Fatal(e)
-	}
-
-	e = p.Send(NewJob(Identifier("Testing"), goodJob))
-	if e != nil {
-		t.Fatal(e)
-	}
-
-	res := <-ret
-	if res.ID != 1 {
-		t.Fatal("wanted job ID 1, got", res.ID)
-	}
-	e = p.Close()
-	if e != nil {
-		t.Fatal(e)
-	}
-	_, e = p.Wait()
-	if e != nil {
-		t.Fatal(e)
-	}
-}
-
-func Test_Pool_CloseOnError(t *testing.T) {
-	p := NewPool(1)
-	r := make(chan bool)
-	e := p.CloseOnError(r)
-	if e != nil {
-		t.Fatal(e)
-	}
-	e = p.Kill()
-	if e != nil {
-		t.Fatal(e)
-	}
-
-	select {
-	case <-r:
-		return
-	case <-time.After(2 * time.Second):
-		t.Fatal("no close after 2 seconds")
-	}
-}
-
 func Example() {
 	// Create a Pool with 5 workers
 	p := NewPool(5)
@@ -210,23 +162,6 @@ func Example() {
 
 	// Wait for the pool to finish
 	p.Wait()
-}
-
-func ExampleStreamInto_Pool() {
-	p := NewPool(1)
-
-	// Create a return channel and register it with the pool
-	ret := make(chan JobResult)
-	p.StreamResultsInto(ret)
-
-	// Start a go routine to receive messages about completed jobs
-	go func() {
-		for r := range ret {
-			fmt.Printf("Job with ID '%s' finished", r.ID)
-		}
-	}()
-
-	// Submit your jobs here and call p.Close() when done
 }
 
 func doBenchMarkSubmit(b *testing.B, Workers int, N int) {

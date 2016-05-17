@@ -149,11 +149,48 @@ func Test_Pool_Kill(t *testing.T) {
 	}
 }
 
-func Test_Pool_NRunning(t *testing.T) {
+func Test_Pool_Grow(t *testing.T) {
 	p := NewPool(2)
-	if c, _ := p.Running(); c != 2 {
+	if c, _ := p.WorkerState(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
 	}
+	e := p.Grow(2)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if c, _ := p.WorkerState(); c != 4 {
+		t.Fatal("wanted 4 workers, got", c)
+	}
+	p.Kill()
+	p.Wait()
+}
+
+func Test_Pool_JobState(t *testing.T) {
+	p := NewPool(1)
+	ok := make(chan bool)
+	job := NewJob(Identifier("Testing"), func(c chan bool) (interface{}, error) {
+		<-ok
+		return nil, nil
+	})
+	e := p.Send(job)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if c, _ := p.JobState(); c != 1 {
+		t.Fatal("wanted 1 running jobs, got", c)
+	}
+	close(ok)
+	p.Kill()
+	p.Wait()
+}
+
+func Test_Pool_NRunning(t *testing.T) {
+	p := NewPool(2)
+	if c, _ := p.WorkerState(); c != 2 {
+		t.Fatal("wanted 2 workers, got", c)
+	}
+	p.Kill()
+	p.Wait()
 }
 
 func Example() {

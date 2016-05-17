@@ -78,6 +78,7 @@ const (
 	tReqClose
 	tReqKill
 	tReqWait
+	tReqGrow
 	tReqGetOpen
 	tReqGetError
 )
@@ -160,9 +161,28 @@ func (p *Pool) Error() error {
 	return <-t.r
 }
 
-// Running returns the current amount of running workers and the amount of requested workers.
-func (p *Pool) Running() (c int, t int) {
-	return p.s.State()
+// Grow grows the amount of workers running in the pool by the requested amount.
+// If the pool is closed ErrClosedPool is return.
+func (p *Pool) Grow(Req int) error {
+	if Req == 0 {
+		return nil
+	}
+	t := ticket{
+		tReqGrow, Req, make(chan error),
+	}
+	p.tQ <- t
+	return <-t.r
+}
+
+// WorkerState returns the current amount of running workers and the amount of requested workers.
+func (p *Pool) WorkerState() (c int, t int) {
+	return p.s.WorkerState()
+}
+
+// JobState returns the amount of currently executing jobs in the pool
+// and the amount of executed jobs in the pool (including failed).
+func (p *Pool) JobState() (c int, f int) {
+	return p.s.JobState()
 }
 
 type jobRequest struct {
@@ -204,6 +224,7 @@ func (p *Pool) doSend(r jobRequest) {
 	for {
 		select {
 		case p.wQ <- r:
+			// Request successfully sent
 			return
 		case resp := <-p.wR:
 			p.res(resp)
@@ -211,9 +232,14 @@ func (p *Pool) doSend(r jobRequest) {
 	}
 }
 
+func (p *Pool) unhealthy() bool {
+	return p.done || p.err != nil || p.closed || p.killed
+}
+
 // bus is the central communication bus for the pool.
 // All pool inputs are collected here as tickets and then actioned on depending on the ticket type.
-// If the ticket is a tReqWait request they are added to the slice of pending tickets and upon pool closure
+// If the ticket is a tReqWait request they are added to the slice of pending tickets and upon pool closure.
+// A central bus is used to prevent concurrent access to any property of the pool.
 func (p *Pool) bus() {
 	// Pending tReqWaits
 	pendWait := []ticket{}
@@ -230,7 +256,7 @@ func (p *Pool) bus() {
 			switch t.t {
 			// New Job request
 			case tReqJob:
-				if p.closed || p.done || p.killed {
+				if p.unhealthy() {
 					t.r <- ErrClosedPool
 					continue
 				}
@@ -262,9 +288,18 @@ func (p *Pool) bus() {
 			// Pool wait request
 			case tReqWait:
 				pendWait = append(pendWait, t)
+			case tReqGrow:
+				if p.unhealthy() {
+					t.r <- ErrClosedPool
+				}
+				for range make([]int, t.data.(int)) {
+					p.s.IncrTarget()
+					p.startWorker()
+				}
+				t.r <- nil
 			// Pool is open request
 			case tReqGetOpen:
-				if p.done || p.err != nil || p.closed || p.killed {
+				if p.unhealthy() {
 					t.r <- ErrClosedPool
 					continue
 				}
@@ -280,6 +315,7 @@ func (p *Pool) bus() {
 				// Pop every item in pending and send return signal to ticket
 				for {
 					if len(pendWait) == 0 {
+						// No more pending message, continue with next cycle
 						break
 					}
 					var t ticket
@@ -306,33 +342,45 @@ func (p *Pool) startWorker() {
 // It executes the job and returns the result to the worker return channel as a JobResult.
 func (p *Pool) worker(started chan bool) {
 	defer p.wg.Done()
-	p.s.Add()
-	defer p.s.Remove()
+	p.s.AddWorker()
+	defer p.s.RemoveWorker()
+	// Acknowledge start
 	close(started)
 	for {
 		select {
 		case req, ok := <-p.wQ:
+			// Worker queue has been closed
 			if !ok {
 				return
 			}
 
-			d := make(chan struct{})
-			go func() {
-				select {
-				case <-d:
-					return
-				case <-p.wC:
-					req.Job.Cancel()
-				}
-			}()
+			p.s.AddJob()
 
 			if p.Hook.Start != nil {
 				p.Hook.Start(req.ID, req.Job)
 			}
 
+			// Cancel wrapper
+			d := make(chan struct{})
+			go func() {
+				select {
+				// Job done
+				case <-d:
+					return
+				// Worker cancel signal received
+				case <-p.wC:
+					req.Job.Cancel()
+				}
+			}()
+
 			s := time.Now()
+
+			// Execute Job
 			e := req.Job.Run()
+
+			// Close cancel wrapping
 			close(d)
+
 			if e != nil {
 				e = newPoolError(&req, e)
 			}
@@ -342,11 +390,15 @@ func (p *Pool) worker(started chan bool) {
 				Duration: time.Since(s),
 				Error:    e,
 			}
+			// Send Job result to return queue
 			p.wR <- j
 
 			if p.Hook.Stop != nil {
 				p.Hook.Stop(req.ID, j)
 			}
+
+			p.s.RemoveJob()
+
 		case <-p.wC:
 			return
 		}

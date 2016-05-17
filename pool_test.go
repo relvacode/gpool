@@ -105,9 +105,18 @@ func Test_Pool_IsOpen(t *testing.T) {
 
 func Test_Pool_Error(t *testing.T) {
 	p := NewPool(1)
-	p.Send(NewJob(Identifier("Testing"), failJob))
-	p.Close()
-	p.Wait()
+	e := p.Send(NewJob(Identifier("Testing"), failJob))
+	if e != nil {
+		t.Fatal(e)
+	}
+	e = p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = p.Wait()
+	if e == nil {
+		t.Fatal("expected error")
+	}
 
 	if e := p.Error(); e == nil {
 		t.Fatal("no pool error")
@@ -130,7 +139,14 @@ func Test_Pool_Kill(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no job response after 2 seconds")
 	}
-	p.Close()
+	e := p.Close()
+	if e != nil {
+		t.Fatal("expected error, got", e)
+	}
+	_, e = p.Wait()
+	if e != ErrKilled {
+		t.Fatal("expected ErrKilled, got", e)
+	}
 }
 
 func Test_Pool_NRunning(t *testing.T) {

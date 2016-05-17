@@ -15,8 +15,8 @@ _gPool is a lightweight utility for managing a pool of workers._
 	p := gpool.NewPool(5)
 
 	// Example JobFn.
-	// After 10 seconds the job will return Hello, World!
-	JobFn := func(c chan struct{}) (interface{}, error) {
+	// After 10 seconds the job will return 'Hello, World!'
+	JobFn := func(c chan bool) (interface{}, error) {
 		<-time.After(10 * time.Second)
 		return "Hello, World!", nil
 	}
@@ -38,7 +38,7 @@ _gPool is a lightweight utility for managing a pool of workers._
 	// jobs is a slice of JobResults of all completed Jobs
 ```
 ### Job
-A `Job` is a task to execute on the `Pool` that contains an `Identifier` and a execution function `PoolJobFn`. It can be any interface that satisfies `gpool.Job` but can also be used with `gpool.NewJob()`.
+A `Job` is a task to execute on the `Pool` that satisfied `gpool.Job`. `gpool.NewJob()` creates a interface{} that contains an `Identifier` and a execution function `JobFn` which can then be submitted to the pool.
 
 ```go
 // Create an Identifer, this in an interface{} which has a String() string method. 
@@ -48,7 +48,7 @@ i := gpool.Identifier("MyTestJob")
 // Create the Job execution function.
 // The job can optionally return an output interface{} and any errors as a result of execution.
 // The c chan will be closed when the Pool is killed, or another job returns a non-nil error.
-fn := func(c chan struct{}) (interface{}, error) {
+fn := func(c chan bool) (interface{}, error) {
   return "Hello, World!", nil
 }
 
@@ -62,7 +62,7 @@ The execution function is given a channel which will be closed when a call to `P
 A call to `Pool.Wait()` will not continue until Jobs in the Pool have completed, so it's important for especially long-running jobs to be able to receive and action this signal in reasonable time.
 
 ```go
-fn := func(c chan struct{}) (interface{}, error) {
+fn := func(c chan bool) (interface{}, error) {
   select {
   case <-c:
     // Cancel signal received, exit without doing anything
@@ -89,10 +89,10 @@ Hook types that are currently available:
 
 ```go
 // HookStart is a function to be called when a Job starts.
-type HookStart func(ID int,j Job)
+type HookStart func(ID int,j gpool.Job)
 
 // HookStop is a function to be called when a Job finishes.
-type HookStop func(ID int,res JobResult)
+type HookStop func(ID int,res gpool.JobResult)
 ```
 
 ### Identifier
@@ -111,7 +111,7 @@ func (c *CopyIdentifier) String() string {
 }
 
 // Example Job
-fn := func(c chan struct{}) (interface{}, error) {
+fn := func(c chan bool) (interface{}, error) {
   return "Hello, World!", nil
 }
 

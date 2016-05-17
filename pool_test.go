@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-var failJob = func(c chan struct{}) (interface{}, error) {
+var failJob = func(c chan bool) (interface{}, error) {
 	return nil, fmt.Errorf("Test error function")
 }
 
-var goodJob = func(c chan struct{}) (interface{}, error) {
+var goodJob = func(c chan bool) (interface{}, error) {
 	return nil, nil
 }
 
@@ -103,10 +103,88 @@ func Test_Pool_IsOpen(t *testing.T) {
 	}
 }
 
+func Test_Pool_Error(t *testing.T) {
+	p := NewPool(1)
+	p.Send(NewJob(Identifier("Testing"), failJob))
+	p.Close()
+	p.Wait()
+
+	if e := p.Error(); e == nil {
+		t.Fatal("no pool error")
+	}
+
+}
+
+func Test_Pool_Kill(t *testing.T) {
+	p := NewPool(1)
+	cancelled := make(chan bool)
+	p.Send(NewJob(Identifier("Testing"), func(c chan bool) (interface{}, error) {
+		<-c
+		close(cancelled)
+		return nil, nil
+	}))
+	p.Kill()
+	select {
+	case <-cancelled:
+		return
+	case <-time.After(2 * time.Second):
+		t.Fatal("no job response after 2 seconds")
+	}
+	p.Close()
+}
+
 func Test_Pool_NRunning(t *testing.T) {
 	p := NewPool(2)
 	if c, _ := p.Running(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
+	}
+}
+
+func Test_Pool_StreamInto(t *testing.T) {
+	p := NewPool(1)
+
+	ret := make(chan JobResult)
+	e := p.StreamResultsInto(ret)
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	e = p.Send(NewJob(Identifier("Testing"), goodJob))
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	res := <-ret
+	if res.ID != 1 {
+		t.Fatal("wanted job ID 1, got", res.ID)
+	}
+	e = p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = p.Wait()
+	if e != nil {
+		t.Fatal(e)
+	}
+}
+
+func Test_Pool_CloseOnError(t *testing.T) {
+	p := NewPool(1)
+	r := make(chan bool)
+	e := p.CloseOnError(r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	e = p.Kill()
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	select {
+	case <-r:
+		return
+	case <-time.After(2 * time.Second):
+		t.Fatal("no close after 2 seconds")
 	}
 }
 
@@ -116,7 +194,7 @@ func Example() {
 
 	// Example PoolJobFn.
 	// After 10 seconds the job will return Hello, World!
-	JobFn := func(c chan struct{}) (interface{}, error) {
+	JobFn := func(c chan bool) (interface{}, error) {
 		<-time.After(10 * time.Second)
 		return "Hello, World!", nil
 	}
@@ -134,9 +212,26 @@ func Example() {
 	p.Wait()
 }
 
+func ExampleStreamInto_Pool() {
+	p := NewPool(1)
+
+	// Create a return channel and register it with the pool
+	ret := make(chan JobResult)
+	p.StreamResultsInto(ret)
+
+	// Start a go routine to receive messages about completed jobs
+	go func() {
+		for r := range ret {
+			fmt.Printf("Job with ID '%s' finished", r.ID)
+		}
+	}()
+
+	// Submit your jobs here and call p.Close() when done
+}
+
 func doBenchMarkSubmit(b *testing.B, Workers int, N int) {
 	p := NewPool(Workers)
-	j := NewJob(Identifier("Benchmark"), func(c chan struct{}) (interface{}, error) {
+	j := NewJob(Identifier("Benchmark"), func(c chan bool) (interface{}, error) {
 		return nil, nil
 	})
 	b.ResetTimer()

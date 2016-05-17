@@ -7,9 +7,11 @@ import (
 	"time"
 )
 
-// ErrClosedPool indicates that a send was attempted on a pool which has already been closed
+// ErrClosedPool indicates that a send was attempted on a pool which has already been closed.
 var ErrClosedPool = errors.New("send on closed pool")
 
+// Pool is the main pool struct containing a bus and workers.
+// Pool should always be invoked via NewPool().
 type Pool struct {
 	// Workers
 	wQ chan jobRequest // Queue
@@ -17,15 +19,19 @@ type Pool struct {
 	wC chan struct{}   // Cancel
 	wD chan bool       // Done
 
-	fJ []JobResult
-	iJ int // Job id
+	fJ  []JobResult
+	fJS []chan<- JobResult
+	iJ  int // Job id
 
 	tQ chan ticket // Send ticket requests
 
 	s   *stateManager
 	err error
+	eRC []chan<- bool // error return channels
 	wg  *sync.WaitGroup
-	// Hooks are functions that are executed during different stages of a Job
+	// Hooks are optional functions that are executed during different stages of a Job.
+	// They are invoked by the worker and thus are called concurrently.
+	// The implementor should consider any race conditions for hook callbacks.
 	Hook struct {
 		Start HookStart
 		Stop  HookStop
@@ -58,18 +64,25 @@ func (p *Pool) start() {
 	}
 	go func() {
 		p.wg.Wait()
+		// Cleanup all return streams
+		for _, c := range p.fJS {
+			close(c)
+		}
 		p.wD <- true
 	}()
 	go p.bus()
 }
 
+// ticket request types
 const (
 	tReqJob int = 1 << iota
 	tReqClose
 	tReqKill
 	tReqWait
-	tReqIsOpen
-	tReqHasError
+	tReqStream
+	tReqGetOpen
+	tReqGetError
+	tReqCloseOnError
 )
 
 // A ticket is a request for input in the queue.
@@ -119,6 +132,7 @@ func (p *Pool) Wait() ([]JobResult, error) {
 // Send sends the given PoolJob as a request to the pool bus.
 // If the pool is closed the error ErrClosedPool is returned.
 // No error is returned if the Send() was successful.
+// A call to Send is blocked until a worker accepts the Job.
 func (p *Pool) Send(job Job) error {
 	t := ticket{
 		tReqJob, job, make(chan error),
@@ -130,7 +144,7 @@ func (p *Pool) Send(job Job) error {
 // IsOpen returns true if the pool is currently open.
 func (p *Pool) IsOpen() bool {
 	t := ticket{
-		tReqIsOpen, nil, make(chan error),
+		tReqGetOpen, nil, make(chan error),
 	}
 	p.tQ <- t
 	e := <-t.r
@@ -143,7 +157,38 @@ func (p *Pool) IsOpen() bool {
 // Error returns the current error present in the pool.
 func (p *Pool) Error() error {
 	t := ticket{
-		tReqHasError, nil, make(chan error),
+		tReqGetError, nil, make(chan error),
+	}
+	p.tQ <- t
+	return <-t.r
+}
+
+// Close on error will close the supplied Return channel when the pool experiences an error or killed by Kill().
+// More than one return channel can be registered.
+// ErrClosedPool is return if the pool is already closed.
+func (p *Pool) CloseOnError(Return chan<- bool) error {
+	if Return == nil {
+		panic("return channel cannot be nil")
+	}
+	t := ticket{
+		tReqCloseOnError, Return, make(chan error),
+	}
+	p.tQ <- t
+	return <-t.r
+}
+
+// StreamResultsInto streams all finished Jobs into the supplied Return channel.
+// The caller is responsible for ensuring the Pool can send to this channel.
+// More than one return channel can be registered, messages will be sent in order of registration.
+// No error is returned if the stream registration was acknowledged.
+// All return channels are closed when the Pool is closed.
+// ErrClosedPool is returned if the pool is already closed.
+func (p *Pool) StreamResultsInto(Return chan<- JobResult) error {
+	if Return == nil {
+		panic("return channel cannot be nil")
+	}
+	t := ticket{
+		tReqStream, Return, make(chan error),
 	}
 	p.tQ <- t
 	return <-t.r
@@ -168,6 +213,10 @@ func (p *Pool) close(kill bool) bool {
 		if kill {
 			close(p.wC)
 		}
+		// Close each registered close on error channel
+		for _, c := range p.eRC {
+			close(c)
+		}
 		return true
 	}
 	return false
@@ -175,6 +224,10 @@ func (p *Pool) close(kill bool) bool {
 
 // res receives a JobResult and processes it.
 func (p *Pool) res(resp JobResult) {
+	// Send result to each return channel
+	for _, c := range p.fJS {
+		c <- resp
+	}
 	if resp.Error != nil {
 		p.err = resp.Error
 		p.close(true)
@@ -199,10 +252,9 @@ func (p *Pool) doSend(r jobRequest) {
 // bus is the central communication bus for the pool.
 // All pool inputs are collected here as tickets and then actioned on depending on the ticket type.
 // If the ticket is a tReqWait request they are added to the slice of pending tickets and upon pool closure
-// the ticket return channel is sent any pool errors.
 func (p *Pool) bus() {
 	// Pending tReqWaits
-	pending := []ticket{}
+	pendWait := []ticket{}
 	for {
 		select {
 		case <-p.wD:
@@ -246,27 +298,43 @@ func (p *Pool) bus() {
 				}
 			// Pool wait request
 			case tReqWait:
-				pending = append(pending, t)
+				pendWait = append(pendWait, t)
 			// Pool is open request
-			case tReqIsOpen:
+			case tReqGetOpen:
 				if p.done || p.err != nil || p.closed {
 					t.r <- ErrClosedPool
 					continue
 				}
 				t.r <- nil
-			case tReqHasError:
+			case tReqGetError:
 				t.r <- p.err
+			case tReqStream:
+				if p.done || p.err != nil || p.closed {
+					t.r <- ErrClosedPool
+					continue
+				}
+				p.fJS = append(p.fJS, t.data.(chan<- JobResult))
+				t.r <- nil
+			case tReqCloseOnError:
+				if p.done || p.err != nil || p.closed {
+					t.r <- ErrClosedPool
+					continue
+				}
+				p.eRC = append(p.eRC, t.data.(chan<- bool))
+				t.r <- nil
+			default:
+				panic("unknown ticket type")
 			}
 		// Default case resolves any pending tickets
 		default:
-			if p.done && len(pending) != 0 {
+			if p.done && len(pendWait) != 0 {
 				// Pop every item in pending and send return signal to ticket
 				for {
-					if len(pending) == 0 {
+					if len(pendWait) == 0 {
 						break
 					}
 					var t ticket
-					t, pending = pending[len(pending)-1], pending[:len(pending)-1]
+					t, pendWait = pendWait[len(pendWait)-1], pendWait[:len(pendWait)-1]
 					t.r <- p.err
 				}
 			}

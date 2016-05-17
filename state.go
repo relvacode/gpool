@@ -4,65 +4,85 @@ import "sync"
 
 func newStateManager(target int) *stateManager {
 	return &stateManager{
-		0, target, &sync.Mutex{},
+		0, target, 0, 0, &sync.Mutex{},
 	}
 }
 
 type stateManager struct {
-	current int
-	target  int
-	lock    *sync.Mutex
+	cW   int
+	tW   int
+	cJ   int
+	dJ   int
+	lock *sync.Mutex
 }
 
-func (s *stateManager) Remove() {
+func (s *stateManager) RemoveWorker() {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	if s.current == 0 {
+	if s.cW == 0 {
 		panic("negative scale counter")
 	}
-	s.current--
+	s.cW--
 }
 
-func (s *stateManager) Add() {
+func (s *stateManager) AddWorker() {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	s.current++
+	s.cW++
 }
 
-func (s *stateManager) SetTarget(t int) int {
-	if t < 1 {
-		panic("target scale less than 1")
+func (s *stateManager) AddJob() {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	s.cJ++
+}
+
+func (s *stateManager) RemoveJob() {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if s.cJ == 0 {
+		panic("negative job counter")
 	}
+	s.cJ--
+	s.dJ++
+}
+
+func (s *stateManager) IncrTarget() {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	s.target = t
-	return s.target - s.current
+	s.tW++
 }
 
 func (s *stateManager) GetTarget() int {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	return s.target
+	return s.tW
 }
 
 // Die returns true if the caller should die to reach target
 func (s *stateManager) Die() bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	if s.current > s.target {
+	if s.cW > s.tW {
 		return true
 	}
 	return false
 }
 
-func (s *stateManager) State() (int, int) {
+func (s *stateManager) WorkerState() (int, int) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	return s.current, s.target
+	return s.cW, s.tW
+}
+
+func (s *stateManager) JobState() (int, int) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	return s.cJ, s.dJ
 }
 
 func (s *stateManager) Stable() bool {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	return s.current == s.target
+	return s.cW == s.tW
 }

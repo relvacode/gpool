@@ -28,14 +28,14 @@ type JobResult struct {
 
 // JobFn is a function that is executed as a pool Job.
 // c is closed when a Kill() request is issued.
-type JobFn func(c chan struct{}) (interface{}, error)
+type JobFn func(c chan bool) (interface{}, error)
 
 // NewJob creates a interface using the supplied Identifier and Job function that satisfies a PoolJob
 func NewJob(Identifier fmt.Stringer, Fn JobFn) Job {
 	return &job{
 		i:  Identifier,
 		fn: Fn,
-		c:  make(chan struct{}, 1),
+		c:  make(chan bool, 1),
 	}
 }
 
@@ -56,7 +56,7 @@ type job struct {
 	fn JobFn
 	o  interface{}
 	i  fmt.Stringer
-	c  chan struct{}
+	c  chan bool
 }
 
 func (j *job) Run() error {

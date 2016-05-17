@@ -214,7 +214,18 @@ func Example() {
 	p.Close()
 
 	// Wait for the pool to finish
-	p.Wait()
+	jobs, e := p.Wait()
+	if e != nil {
+		// Do something with errors here
+	}
+
+	// Iterate over the completed jobs and print the output
+	for _, j := range jobs {
+		o := j.Job.Output()
+		if s, ok := o.(string); ok {
+			fmt.Println(s) // Outputs: Hello, World!
+		}
+	}
 }
 
 func doBenchMarkSubmit(b *testing.B, Workers int, N int) {

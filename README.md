@@ -15,7 +15,7 @@ _gPool is a lightweight utility for managing a pool of workers._
 	p := gpool.NewPool(5)
 
 	// Example JobFn.
-	// After 10 seconds the job will return Hello, World!
+	// After 10 seconds the job will return 'Hello, World!'
 	JobFn := func(c chan bool) (interface{}, error) {
 		<-time.After(10 * time.Second)
 		return "Hello, World!", nil
@@ -38,7 +38,7 @@ _gPool is a lightweight utility for managing a pool of workers._
 	// jobs is a slice of JobResults of all completed Jobs
 ```
 ### Job
-A `Job` is a task to execute on the `Pool` that contains an `Identifier` and a execution function `PoolJobFn`. It can be any interface that satisfies `gpool.Job` but can also be used with `gpool.NewJob()`.
+A `Job` is a task to execute on the `Pool` that satisfied `gpool.Job`. `gpool.NewJob()` creates a interface{} that contains an `Identifier` and a execution function `JobFn` which can then be submitted to the pool.
 
 ```go
 // Create an Identifer, this in an interface{} which has a String() string method. 

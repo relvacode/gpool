@@ -10,6 +10,9 @@ import (
 // ErrClosedPool indicates that a send was attempted on a pool which has already been closed.
 var ErrClosedPool = errors.New("send on closed pool")
 
+// ErrKilled indicates that the pool was killed by a call to Kill()
+var ErrKilled = errors.New("pool killed by signal")
+
 // Pool is the main pool struct containing a bus and workers.
 // Pool should always be invoked via NewPool().
 type Pool struct {
@@ -172,6 +175,9 @@ type jobRequest struct {
 func (p *Pool) close(kill bool) bool {
 	if !p.killed && kill {
 		p.killed = true
+		if p.err == nil {
+			p.err = ErrKilled
+		}
 		close(p.wC)
 	}
 	if !p.closed {
@@ -224,7 +230,7 @@ func (p *Pool) bus() {
 			switch t.t {
 			// New Job request
 			case tReqJob:
-				if p.closed || p.done {
+				if p.closed || p.done || p.killed {
 					t.r <- ErrClosedPool
 					continue
 				}
@@ -237,6 +243,7 @@ func (p *Pool) bus() {
 			// Pool close request
 			case tReqClose:
 				if p.done {
+					t.r <- ErrClosedPool
 					continue
 				}
 				p.close(false)

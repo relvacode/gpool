@@ -38,6 +38,7 @@ type Pool struct {
 	}
 
 	closed bool
+	killed bool
 	done   bool
 }
 
@@ -207,12 +208,13 @@ type jobRequest struct {
 // close closes the pool if not already closed.
 // Returns true if the pool was closed.
 func (p *Pool) close(kill bool) bool {
+	if !p.killed && kill {
+		p.killed = true
+		close(p.wC)
+	}
 	if !p.closed {
 		p.closed = true
 		close(p.wQ)
-		if kill {
-			close(p.wC)
-		}
 		// Close each registered close on error channel
 		for _, c := range p.eRC {
 			close(c)
@@ -301,7 +303,7 @@ func (p *Pool) bus() {
 				pendWait = append(pendWait, t)
 			// Pool is open request
 			case tReqGetOpen:
-				if p.done || p.err != nil || p.closed {
+				if p.done || p.err != nil || p.closed || p.killed {
 					t.r <- ErrClosedPool
 					continue
 				}
@@ -309,14 +311,14 @@ func (p *Pool) bus() {
 			case tReqGetError:
 				t.r <- p.err
 			case tReqStream:
-				if p.done || p.err != nil || p.closed {
+				if p.done || p.err != nil || p.closed || p.killed {
 					t.r <- ErrClosedPool
 					continue
 				}
 				p.fJS = append(p.fJS, t.data.(chan<- JobResult))
 				t.r <- nil
 			case tReqCloseOnError:
-				if p.done || p.err != nil || p.closed {
+				if p.done || p.err != nil || p.closed || p.killed {
 					t.r <- ErrClosedPool
 					continue
 				}

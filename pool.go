@@ -1,4 +1,4 @@
-// gPool is a utility for pooling workers
+// Package gpool is a utility for executing jobs in a pool of workers
 package gpool
 
 import (
@@ -132,6 +132,9 @@ func (p *Pool) Wait() ([]JobResult, error) {
 // No error is returned if the Send() was successful.
 // A call to Send is blocked until a worker accepts the Job.
 func (p *Pool) Send(job Job) error {
+	if job == nil {
+		panic("send of nil job")
+	}
 	t := ticket{
 		tReqJob, job, make(chan error),
 	}

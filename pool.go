@@ -27,6 +27,7 @@ type Pool struct {
 
 	s   *stateManager
 	err error
+	eRC []chan<- bool // error return channels
 	wg  *sync.WaitGroup
 	// Hooks are optional functions that are executed during different stages of a Job.
 	// They are invoked by the worker and thus are called concurrently.
@@ -81,6 +82,7 @@ const (
 	tReqStream
 	tReqGetOpen
 	tReqGetError
+	tReqCloseOnError
 )
 
 // A ticket is a request for input in the queue.
@@ -161,13 +163,27 @@ func (p *Pool) Error() error {
 	return <-t.r
 }
 
-// StreamInto streams all finished Jobs into the supplied Return channel.
-// The caller is responsible for ensuring the Pool can send to this channel.
+// Close on error will close the supplied Return channel when the pool experiences an error or killed by Kill().
 // More than one return channel can be registered.
+// ErrClosedPool is return if the pool is already closed.
+func (p *Pool) CloseOnError(Return chan<- bool) error {
+	if Return == nil {
+		panic("return channel cannot be nil")
+	}
+	t := ticket{
+		tReqCloseOnError, Return, make(chan error),
+	}
+	p.tQ <- t
+	return <-t.r
+}
+
+// StreamResultsInto streams all finished Jobs into the supplied Return channel.
+// The caller is responsible for ensuring the Pool can send to this channel.
+// More than one return channel can be registered, messages will be sent in order of registration.
 // No error is returned if the stream registration was acknowledged.
 // All return channels are closed when the Pool is closed.
 // ErrClosedPool is returned if the pool is already closed.
-func (p *Pool) StreamInto(Return chan<- JobResult) error {
+func (p *Pool) StreamResultsInto(Return chan<- JobResult) error {
 	if Return == nil {
 		panic("return channel cannot be nil")
 	}
@@ -196,6 +212,10 @@ func (p *Pool) close(kill bool) bool {
 		close(p.wQ)
 		if kill {
 			close(p.wC)
+		}
+		// Close each registered close on error channel
+		for _, c := range p.eRC {
+			close(c)
 		}
 		return true
 	}
@@ -294,6 +314,13 @@ func (p *Pool) bus() {
 					continue
 				}
 				p.fJS = append(p.fJS, t.data.(chan<- JobResult))
+				t.r <- nil
+			case tReqCloseOnError:
+				if p.done || p.err != nil || p.closed {
+					t.r <- ErrClosedPool
+					continue
+				}
+				p.eRC = append(p.eRC, t.data.(chan<- bool))
 				t.r <- nil
 			default:
 				panic("unknown ticket type")

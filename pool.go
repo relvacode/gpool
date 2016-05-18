@@ -92,8 +92,8 @@ const (
 	tReqTeardown
 )
 
-// timeout before giving up sending a ticket and returning ErrAckTimeout.
-const ackTimeout = time.Second
+// AckTimeout is the duration before giving up sending a ticket and returning ErrAckTimeout.
+var AckTimeout = time.Second
 
 // A ticket is a request for input in the queue.
 // This prevents direct access to queue channels which reduces the risk of bad things happening.
@@ -120,7 +120,7 @@ func (p *Pool) ack(t ticket) error {
 	select {
 	case p.tQ <- t:
 		return <-t.r
-	case <-time.After(ackTimeout):
+	case <-time.After(AckTimeout):
 		return ErrAckTimeout
 	}
 }

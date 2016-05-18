@@ -55,6 +55,7 @@ func Test_Pool_JobResultID(t *testing.T) {
 
 func Test_Pool_JobMany_40(t *testing.T) {
 	p := NewPool(3)
+	defer p.Teardown()
 	for range make([]int, 40) {
 		p.Send(NewJob(Identifier("Testing"), goodJob))
 	}
@@ -73,6 +74,7 @@ func Test_Pool_JobMany_40(t *testing.T) {
 
 func Test_Pool_JobMany_1(t *testing.T) {
 	p := NewPool(1)
+	defer p.Teardown()
 	for range make([]int, 40) {
 		p.Send(NewJob(Identifier("Testing"), goodJob))
 	}
@@ -91,6 +93,7 @@ func Test_Pool_JobMany_1(t *testing.T) {
 
 func Test_Pool_Healthy(t *testing.T) {
 	p := NewPool(1)
+	defer p.Teardown()
 	if ok := p.Healthy(); !ok {
 		t.Fatal("pool unexpectedly closed")
 	}
@@ -105,6 +108,7 @@ func Test_Pool_Healthy(t *testing.T) {
 
 func Test_Pool_Error(t *testing.T) {
 	p := NewPool(1)
+	defer p.Teardown()
 	e := p.Send(NewJob(Identifier("Testing"), failJob))
 	if e != nil {
 		t.Fatal(e)
@@ -126,6 +130,7 @@ func Test_Pool_Error(t *testing.T) {
 
 func Test_Pool_Kill(t *testing.T) {
 	p := NewPool(1)
+	defer p.Teardown()
 	cancelled := make(chan bool)
 	p.Send(NewJob(Identifier("Testing"), func(c chan bool) (interface{}, error) {
 		<-c
@@ -151,6 +156,7 @@ func Test_Pool_Kill(t *testing.T) {
 
 func Test_Pool_Grow(t *testing.T) {
 	p := NewPool(2)
+	defer p.Teardown()
 	if c, _ := p.WorkerState(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
 	}
@@ -167,6 +173,7 @@ func Test_Pool_Grow(t *testing.T) {
 
 func Test_Pool_JobState(t *testing.T) {
 	p := NewPool(1)
+	defer p.Teardown()
 	ok := make(chan bool)
 	job := NewJob(Identifier("Testing"), func(c chan bool) (interface{}, error) {
 		<-ok
@@ -186,6 +193,7 @@ func Test_Pool_JobState(t *testing.T) {
 
 func Test_Pool_NRunning(t *testing.T) {
 	p := NewPool(2)
+	defer p.Teardown()
 	if c, _ := p.WorkerState(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
 	}
@@ -193,9 +201,41 @@ func Test_Pool_NRunning(t *testing.T) {
 	p.Wait()
 }
 
+func Test_Pool_Teardown(t *testing.T) {
+	p := NewPool(1)
+
+	e := p.Teardown()
+	if e != ErrRunning {
+		t.Fatal("wanted ErrRunning, got", e)
+	}
+
+	e = p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	_, e = p.Wait()
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	e = p.Teardown()
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	e = p.Error()
+	if e != ErrAckTimeout {
+		t.Fatal("wanted ErrAckTimeout, got", e)
+	}
+}
+
 func Example() {
 	// Create a Pool with 5 workers
 	p := NewPool(5)
+
+	// Terminate the pool bus on exit
+	defer p.Teardown()
 
 	// Example PoolJobFn.
 	// After 10 seconds the job will return Hello, World!
@@ -230,6 +270,8 @@ func Example() {
 
 func doBenchMarkSubmit(b *testing.B, Workers int, N int) {
 	p := NewPool(Workers)
+	defer p.Wait()
+	defer p.Teardown()
 	j := NewJob(Identifier("Benchmark"), func(c chan bool) (interface{}, error) {
 		return nil, nil
 	})

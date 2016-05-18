@@ -13,6 +13,12 @@ var ErrClosedPool = errors.New("send on closed pool")
 // ErrKilled indicates that the pool was killed by a call to Kill()
 var ErrKilled = errors.New("pool killed by signal")
 
+// ErrRunning indicates that a teardown request cannot be fulfilled as there are active workers in the pool.
+var ErrRunning = errors.New("cannot teardown. workers active")
+
+// ErrAckTimeout indicates that there is not active bus to receive this request.
+var ErrAckTimeout = errors.New("ticket not acknowledged")
+
 // Pool is the main pool struct containing a bus and workers.
 // Pool should always be invoked via NewPool().
 type Pool struct {
@@ -83,36 +89,54 @@ const (
 	tReqGrow
 	tReqHealthy
 	tReqGetError
+	tReqTeardown
 )
+
+// timeout before giving up sending a ticket and returning ErrAckTimeout.
+const ackTimeout = time.Second
 
 // A ticket is a request for input in the queue.
 // This prevents direct access to queue channels which reduces the risk of bad things happening.
 type ticket struct {
 	t    tReq        // Ticket type
 	data interface{} // Ticket request data
+	ack  chan bool   // Acknowledgement channel
 	r    chan error  // Return channel
+}
+
+// newTicket creates a new ticket with the supplied ReqType and optional data.
+func newTicket(r tReq, data interface{}) ticket {
+	return ticket{
+		t:    r,
+		data: data,
+		ack:  make(chan bool),
+		r:    make(chan error),
+	}
+}
+
+// ack attempts to send the ticket to the ticket queue.
+// If message is not sent in ackTimeout duration, ErrAckTimeout is returned.
+func (p *Pool) ack(t ticket) error {
+	select {
+	case p.tQ <- t:
+		return <-t.r
+	case <-time.After(ackTimeout):
+		return ErrAckTimeout
+	}
 }
 
 // Kill sends a kill request to the pool bus.
 // When sent, any currently running jobs have Cancel() called.
 // If the pool has already been killed or closed ErrClosedPool is returned.
 func (p *Pool) Kill() error {
-	t := ticket{
-		tReqKill, nil, make(chan error),
-	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqKill, nil))
 }
 
 // Close sends a graceful close request to the pool bus.
 // Workers will finish after the last submitted job is complete.
 // Close does not return an error if the pool is already closed.
 func (p *Pool) Close() error {
-	t := ticket{
-		tReqClose, nil, make(chan error),
-	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqClose, nil))
 }
 
 // Wait waits for the pool worker group to finish and then returns all jobs completed during execution.
@@ -122,11 +146,7 @@ func (p *Pool) Close() error {
 // or ensures a call to Pool.Close will be made.
 // Wait requests are stacked until they can be resolved in the next bus cycle.
 func (p *Pool) Wait() ([]JobResult, error) {
-	t := ticket{
-		tReqWait, nil, make(chan error),
-	}
-	p.tQ <- t
-	return p.fJ, <-t.r
+	return p.fJ, p.ack(newTicket(tReqWait, nil))
 }
 
 // Send sends the given PoolJob as a request to the pool bus.
@@ -137,20 +157,12 @@ func (p *Pool) Send(job Job) error {
 	if job == nil {
 		panic("send of nil job")
 	}
-	t := ticket{
-		tReqJob, job, make(chan error),
-	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqJob, job))
 }
 
 // Healthy returns true if the pool is healthy and able to receive further jobs.
 func (p *Pool) Healthy() bool {
-	t := ticket{
-		tReqHealthy, nil, make(chan error),
-	}
-	p.tQ <- t
-	if <-t.r == nil {
+	if p.ack(newTicket(tReqHealthy, nil)) == nil {
 		return true
 	}
 	return false
@@ -158,11 +170,7 @@ func (p *Pool) Healthy() bool {
 
 // Error returns the current error present in the pool.
 func (p *Pool) Error() error {
-	t := ticket{
-		tReqGetError, nil, make(chan error),
-	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqGetError, nil))
 }
 
 // Grow grows the amount of workers running in the pool by the requested amount.
@@ -171,11 +179,14 @@ func (p *Pool) Grow(Req int) error {
 	if Req == 0 {
 		return nil
 	}
-	t := ticket{
-		tReqGrow, Req, make(chan error),
-	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqGrow, Req))
+}
+
+// Teardown stops the bus. Any further messages will have no receiver.
+// If there are active workers ErrRunning is returned.
+// Any pending waits are instantly resolved.
+func (p *Pool) Teardown() error {
+	return p.ack(newTicket(tReqTeardown, nil))
 }
 
 // WorkerState returns the current amount of running workers and the amount of requested workers.
@@ -240,6 +251,24 @@ func (p *Pool) unhealthy() bool {
 	return p.done || p.err != nil || p.closed || p.killed
 }
 
+// resolves resolves all remaining tickets by sending them the ctx error.
+// any unresolved tickets are returned, currently unused.
+func (p *Pool) resolve(ctx error, tickets ...ticket) []ticket {
+	if len(tickets) != 0 {
+		// Pop every item in tickets and send return signal to ticket
+		for {
+			if len(tickets) == 0 {
+				// No more pending message, continue with next cycle
+				break
+			}
+			var t ticket
+			t, tickets = tickets[len(tickets)-1], tickets[:len(tickets)-1]
+			t.r <- ctx
+		}
+	}
+	return []ticket{}
+}
+
 // bus is the central communication bus for the pool.
 // All pool inputs are collected here as tickets and then actioned on depending on the ticket type.
 // If the ticket is a tReqWait request they are added to the slice of pending tickets and upon pool closure.
@@ -257,6 +286,8 @@ func (p *Pool) bus() {
 			p.res(resp)
 		// Receive ticket request
 		case t := <-p.tQ:
+			// Acknowledge ticket receipt
+			close(t.ack)
 			switch t.t {
 			// New Job request
 			case tReqJob:
@@ -310,24 +341,24 @@ func (p *Pool) bus() {
 				t.r <- nil
 			case tReqGetError:
 				t.r <- p.err
+			case tReqTeardown:
+				if c, _ := p.s.WorkerState(); c > 0 || !p.done {
+					t.r <- ErrRunning
+					continue
+				}
+				// Acknowledge teardown
+				t.r <- nil
+				// Resolve any remaining waits
+				pendWait = p.resolve(p.err, pendWait...)
+				return
 			default:
 				panic("unknown ticket type")
 			}
 		// Default case resolves any pending tickets
 		default:
-			if p.done && len(pendWait) != 0 {
-				// Pop every item in pending and send return signal to ticket
-				for {
-					if len(pendWait) == 0 {
-						// No more pending message, continue with next cycle
-						break
-					}
-					var t ticket
-					t, pendWait = pendWait[len(pendWait)-1], pendWait[:len(pendWait)-1]
-					t.r <- p.err
-				}
+			if p.done {
+				pendWait = p.resolve(p.err, pendWait...)
 			}
-
 		}
 
 	}

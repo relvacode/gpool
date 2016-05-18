@@ -1,12 +1,10 @@
 # gPool - Pool Based Job Execution
 
-[![Build Status](https://travis-ci.org/relvacode/gpool.svg?branch=master)](https://travis-ci.org/relvacode/gpool)
+[![Build Status](https://travis-ci.org/relvacode/gpool.svg?branch=master)](https://travis-ci.org/relvacode/gpool) [![GoDoc](https://godoc.org/github.com/relvacode/gpool?status.svg)](https://godoc.org/github.com/relvacode/gpool)
 
 _gPool is a lightweight utility for managing a pool of workers._
 
 `import "github.com/relvacode/gpool"`
-
-[__API Reference__](https://godoc.org/github.com/relvacode/gpool)
 
 ## Basic Usage
 ```go

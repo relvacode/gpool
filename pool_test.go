@@ -89,16 +89,16 @@ func Test_Pool_JobMany_1(t *testing.T) {
 	}
 }
 
-func Test_Pool_IsOpen(t *testing.T) {
+func Test_Pool_Healthy(t *testing.T) {
 	p := NewPool(1)
-	if ok := p.IsOpen(); !ok {
+	if ok := p.Healthy(); !ok {
 		t.Fatal("pool unexpectedly closed")
 	}
 	e := p.Close()
 	if e != nil {
 		t.Fatal(e)
 	}
-	if ok := p.IsOpen(); ok {
+	if ok := p.Healthy(); ok {
 		t.Fatal("pool not closed")
 	}
 }

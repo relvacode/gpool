@@ -79,7 +79,7 @@ const (
 	tReqKill
 	tReqWait
 	tReqGrow
-	tReqGetOpen
+	tReqHealthy
 	tReqGetError
 )
 
@@ -142,10 +142,10 @@ func (p *Pool) Send(job Job) error {
 	return <-t.r
 }
 
-// IsOpen returns true if the pool is currently open.
-func (p *Pool) IsOpen() bool {
+// Healthy returns true if the pool is healthy and able to receive further jobs.
+func (p *Pool) Healthy() bool {
 	t := ticket{
-		tReqGetOpen, nil, make(chan error),
+		tReqHealthy, nil, make(chan error),
 	}
 	p.tQ <- t
 	e := <-t.r
@@ -301,7 +301,7 @@ func (p *Pool) bus() {
 				}
 				t.r <- nil
 			// Pool is open request
-			case tReqGetOpen:
+			case tReqHealthy:
 				if p.unhealthy() {
 					t.r <- ErrClosedPool
 					continue

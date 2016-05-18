@@ -13,12 +13,6 @@ var ErrClosedPool = errors.New("send on closed pool")
 // ErrKilled indicates that the pool was killed by a call to Kill()
 var ErrKilled = errors.New("pool killed by signal")
 
-// ErrRunning indicates that a teardown request cannot be fulfilled as there are active workers in the pool.
-var ErrRunning = errors.New("cannot teardown. workers active")
-
-// ErrAckTimeout indicates that there is not active bus to receive this request.
-var ErrAckTimeout = errors.New("ticket not acknowledged")
-
 // Pool is the main pool struct containing a bus and workers.
 // Pool should always be invoked via NewPool().
 type Pool struct {

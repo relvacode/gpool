@@ -89,11 +89,7 @@ const (
 	tReqGrow
 	tReqHealthy
 	tReqGetError
-	tReqTeardown
 )
-
-// AckTimeout is the duration before giving up sending a ticket and returning ErrAckTimeout.
-var AckTimeout = time.Second
 
 // A ticket is a request for input in the queue.
 // This prevents direct access to queue channels which reduces the risk of bad things happening.
@@ -115,14 +111,12 @@ func newTicket(r tReq, data interface{}) ticket {
 }
 
 // ack attempts to send the ticket to the ticket queue.
-// If message is not sent in ackTimeout duration, ErrAckTimeout is returned.
+// First waits for acknowledgement of ticket, then waits for the return message.
+// In future, there may be a timeout around the return message.
 func (p *Pool) ack(t ticket) error {
-	select {
-	case p.tQ <- t:
-		return <-t.r
-	case <-time.After(AckTimeout):
-		return ErrAckTimeout
-	}
+	p.tQ <- t
+	<-t.ack
+	return  <-t.r
 }
 
 // Kill sends a kill request to the pool bus.
@@ -180,13 +174,6 @@ func (p *Pool) Grow(Req int) error {
 		return nil
 	}
 	return p.ack(newTicket(tReqGrow, Req))
-}
-
-// Teardown stops the bus. Any further messages will have no receiver.
-// If there are active workers ErrRunning is returned.
-// Any pending waits are instantly resolved.
-func (p *Pool) Teardown() error {
-	return p.ack(newTicket(tReqTeardown, nil))
 }
 
 // WorkerState returns the current amount of running workers and the amount of requested workers.
@@ -341,16 +328,6 @@ func (p *Pool) bus() {
 				t.r <- nil
 			case tReqGetError:
 				t.r <- p.err
-			case tReqTeardown:
-				if c, _ := p.s.WorkerState(); c > 0 || !p.done {
-					t.r <- ErrRunning
-					continue
-				}
-				// Acknowledge teardown
-				t.r <- nil
-				// Resolve any remaining waits
-				pendWait = p.resolve(p.err, pendWait...)
-				return
 			default:
 				panic("unknown ticket type")
 			}

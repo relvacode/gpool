@@ -1,4 +1,4 @@
-// gPool is a utility for pooling workers
+// Package gpool is a utility for executing jobs in a pool of workers
 package gpool
 
 import (
@@ -79,7 +79,7 @@ const (
 	tReqKill
 	tReqWait
 	tReqGrow
-	tReqGetOpen
+	tReqHealthy
 	tReqGetError
 )
 
@@ -132,6 +132,9 @@ func (p *Pool) Wait() ([]JobResult, error) {
 // No error is returned if the Send() was successful.
 // A call to Send is blocked until a worker accepts the Job.
 func (p *Pool) Send(job Job) error {
+	if job == nil {
+		panic("send of nil job")
+	}
 	t := ticket{
 		tReqJob, job, make(chan error),
 	}
@@ -139,10 +142,10 @@ func (p *Pool) Send(job Job) error {
 	return <-t.r
 }
 
-// IsOpen returns true if the pool is currently open.
-func (p *Pool) IsOpen() bool {
+// Healthy returns true if the pool is healthy and able to receive further jobs.
+func (p *Pool) Healthy() bool {
 	t := ticket{
-		tReqGetOpen, nil, make(chan error),
+		tReqHealthy, nil, make(chan error),
 	}
 	p.tQ <- t
 	e := <-t.r
@@ -298,7 +301,7 @@ func (p *Pool) bus() {
 				}
 				t.r <- nil
 			// Pool is open request
-			case tReqGetOpen:
+			case tReqHealthy:
 				if p.unhealthy() {
 					t.r <- ErrClosedPool
 					continue

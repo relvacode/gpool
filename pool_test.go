@@ -89,16 +89,16 @@ func Test_Pool_JobMany_1(t *testing.T) {
 	}
 }
 
-func Test_Pool_IsOpen(t *testing.T) {
+func Test_Pool_Healthy(t *testing.T) {
 	p := NewPool(1)
-	if ok := p.IsOpen(); !ok {
+	if ok := p.Healthy(); !ok {
 		t.Fatal("pool unexpectedly closed")
 	}
 	e := p.Close()
 	if e != nil {
 		t.Fatal(e)
 	}
-	if ok := p.IsOpen(); ok {
+	if ok := p.Healthy(); ok {
 		t.Fatal("pool not closed")
 	}
 }
@@ -214,7 +214,18 @@ func Example() {
 	p.Close()
 
 	// Wait for the pool to finish
-	p.Wait()
+	jobs, e := p.Wait()
+	if e != nil {
+		// Do something with errors here
+	}
+
+	// Iterate over the completed jobs and print the output
+	for _, j := range jobs {
+		o := j.Job.Output()
+		if s, ok := o.(string); ok {
+			fmt.Println(s) // Outputs: Hello, World!
+		}
+	}
 }
 
 func doBenchMarkSubmit(b *testing.B, Workers int, N int) {

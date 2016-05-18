@@ -73,8 +73,10 @@ func (p *Pool) start() {
 }
 
 // ticket request types
+type tReq int
+
 const (
-	tReqJob int = 1 << iota
+	tReqJob tReq = 1 << iota
 	tReqClose
 	tReqKill
 	tReqWait
@@ -86,7 +88,7 @@ const (
 // A ticket is a request for input in the queue.
 // This prevents direct access to queue channels which reduces the risk of bad things happening.
 type ticket struct {
-	t    int         // Ticket type
+	t    tReq        // Ticket type
 	data interface{} // Ticket request data
 	r    chan error  // Return channel
 }
@@ -148,8 +150,7 @@ func (p *Pool) Healthy() bool {
 		tReqHealthy, nil, make(chan error),
 	}
 	p.tQ <- t
-	e := <-t.r
-	if e == nil {
+	if <-t.r == nil {
 		return true
 	}
 	return false

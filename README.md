@@ -31,12 +31,12 @@ _gPool is a lightweight utility for managing a pool of workers._
 	p.Close()
 
 	// Wait for the pool to finish. This will block forever if the pool is not closed.
-	jobs, e := p.Wait()
+	res, e := p.Wait()
 	// e is any error that occured within the Pool
-	// jobs is a slice of JobResults of all completed Jobs
+	// res is a slice of JobResults of all completed Jobs
 ```
 ### Job
-A `Job` is a task to execute on the `Pool` that satisfied `gpool.Job`. `gpool.NewJob()` creates a interface{} that contains an `Identifier` and a execution function `JobFn` which can then be submitted to the pool.
+A `Job` is a task to execute on the `Pool` that satisfies `gpool.Job`. `gpool.NewJob()` creates a interface{} that contains an `Identifier` and a execution function `JobFn` which can then be submitted to the pool.
 
 ```go
 // Create an Identifer, this in an interface{} which has a String() string method. 
@@ -55,9 +55,8 @@ Job := gpool.NewJob(i, fn)
 ```
 
 #### Cancel
-Jobs can be cancelled during execution via a channel closer.
-The execution function is given a channel which will be closed when a call to `Pool.Kill()` is made or another `Job` in the `Pool` returns an error.
-A call to `Pool.Wait()` will not continue until Jobs in the Pool have completed, so it's important for especially long-running jobs to be able to receive and action this signal in reasonable time.
+The execution `JobFn` function supplied in `NewJob()` is given a channel which will be closed when a call to `Pool.Kill()` is made or another `Job` in the `Pool` returns an error. This is called via `Job.Cancel()`.
+A call to `Pool.Wait()` will not continue until all currently active Jobs in the Pool have completed, so it's important for especially long-running jobs to be able to receive and action this signal in reasonable time.
 
 ```go
 fn := func(c chan bool) (interface{}, error) {
@@ -72,9 +71,30 @@ fn := func(c chan bool) (interface{}, error) {
 }
 ```
 
+#### Result
+The output from a job is a `JobResult`. This contains a unique ID, the originating Job and the duration it ran.
+Only jobs that did not return an error are returned from `Pool.Wait()`.
+
+```go
+p := NewPool(5)
+
+//...Send a few jobs and close the pool
+
+res, e := p.Wait()
+// Do something with e here
+
+// Aggregate the total duration of all Jobs
+totalDuration := time.Duration(0)
+for _, r :- range res {
+  totalDuration += r.Duration
+}
+
+```
+
 ### Hooks
 A `Hook` is a function that is executed when a Pool worker starts or stops executing a `Job`. 
 Hooks are entirely optional and should not contain any real computation, primarily they should be used for logging.
+They are executed by the worker and thus are called concurrently so it's important you don't introduce any race conditions because of shared access.
 
 ```go
 p := gpool.NewPool(1)
@@ -114,7 +134,7 @@ fn := func(c chan bool) (interface{}, error) {
 }
 
 // Initialise your custom Identifier with some data
-i := &CopyIdentifier{
+i := CopyIdentifier{
   Name:   "Copy file.txt",
   Source: "/src/file.txt",
   Dest:   "/dst/file.txt",
@@ -123,9 +143,9 @@ Job := gpool.NewJob(i, fn)
 
 p := gpool.NewPool(5)
 
-// Add a Pool Hook
+// Set a Pool Hook
 p.Hook.Start = func(ID int, j gpool.Job) {
-  // Check if the Idenitifer is a *CopyIdentifier. If so then print the source and destination.
+  // Check if the Idenitifer is a CopyIdentifier. If so then print the source and destination.
   if i, ok :=  j.Identifier().(*CopyIdentifier); ok {
     log.Println("Copy", i.Source, "to", i.Dest) // Outputs: Copy /src/file.txt to /dst/file.txt
   }

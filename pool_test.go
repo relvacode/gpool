@@ -2,9 +2,9 @@ package gpool
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
-	"sync"
 )
 
 var failJob = func(c chan bool) (interface{}, error) {
@@ -186,6 +186,35 @@ func Test_Pool_Grow(t *testing.T) {
 	}
 	if c, _ := p.WorkerState(); c != 4 {
 		t.Fatal("wanted 4 workers, got", c)
+	}
+	p.Kill()
+	p.Wait()
+}
+
+func Test_Pool_Shrink(t *testing.T) {
+	p := NewPool(4)
+	if c, _ := p.WorkerState(); c != 4 {
+		t.Fatal("wanted 4 workers, got", c)
+	}
+	e := p.Shrink(2)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if c, _ := p.WorkerState(); c != 2 {
+		t.Fatal("wanted 2 workers, got", c)
+	}
+	p.Kill()
+	p.Wait()
+}
+
+func Test_Pool_Shrink_Neg(t *testing.T) {
+	p := NewPool(4)
+	if c, _ := p.WorkerState(); c != 4 {
+		t.Fatal("wanted 4 workers, got", c)
+	}
+	e := p.Shrink(4)
+	if e != ErrWorkerCount {
+		t.Fatal("wanted ErrWorkerCount, got", e)
 	}
 	p.Kill()
 	p.Wait()

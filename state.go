@@ -47,26 +47,25 @@ func (s *stateManager) RemoveJob() {
 	s.dJ++
 }
 
-func (s *stateManager) IncrTarget() {
+func (s *stateManager) IncrTarget(I int) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
-	s.tW++
+	s.tW += I
+}
+
+func (s *stateManager) DecTarget(I int) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if (s.tW - I) < 1 {
+		panic("requested target lower than 0")
+	}
+	s.tW -= I
 }
 
 func (s *stateManager) GetTarget() int {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	return s.tW
-}
-
-// Die returns true if the caller should die to reach target
-func (s *stateManager) Die() bool {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	if s.cW > s.tW {
-		return true
-	}
-	return false
 }
 
 func (s *stateManager) WorkerState() (int, int) {

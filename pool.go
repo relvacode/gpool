@@ -13,6 +13,9 @@ var ErrClosedPool = errors.New("send on closed pool")
 // ErrKilled indicates that the pool was killed by a call to Kill()
 var ErrKilled = errors.New("pool killed by signal")
 
+// ErrWorkerCount indicates that a request to modify worker size is invalid.
+var ErrWorkerCount = errors.New("invalid worker count request")
+
 // Pool is the main pool struct containing a bus and workers.
 // Pool should always be invoked via NewPool().
 type Pool struct {
@@ -21,6 +24,7 @@ type Pool struct {
 	wR chan JobResult  // Return
 	wC chan struct{}   // Cancel
 	wD chan bool       // Done
+	wS chan chan bool  // Shrink
 
 	fJ []JobResult
 	iJ int // Job id
@@ -47,12 +51,16 @@ type Pool struct {
 // NewPool creates a new Pool with the given worker count.
 // Workers in the pool are started automatically.
 func NewPool(Workers int) *Pool {
+	if Workers == 0 {
+		panic("need at least one worker")
+	}
 	p := &Pool{
 		tQ: make(chan ticket),
 		wQ: make(chan jobRequest),
 		wC: make(chan struct{}),
 		wR: make(chan JobResult),
 		wD: make(chan bool),
+		wS: make(chan chan bool),
 		wg: &sync.WaitGroup{},
 		s:  newStateManager(Workers),
 	}
@@ -73,12 +81,15 @@ func (p *Pool) start() {
 }
 
 // ticket request types
+type tReq int
+
 const (
-	tReqJob int = 1 << iota
+	tReqJob tReq = 1 << iota
 	tReqClose
 	tReqKill
 	tReqWait
 	tReqGrow
+	tReqShrink
 	tReqHealthy
 	tReqGetError
 )
@@ -86,31 +97,43 @@ const (
 // A ticket is a request for input in the queue.
 // This prevents direct access to queue channels which reduces the risk of bad things happening.
 type ticket struct {
-	t    int         // Ticket type
+	t    tReq        // Ticket type
 	data interface{} // Ticket request data
+	ack  chan bool   // Acknowledgement channel
 	r    chan error  // Return channel
+}
+
+// newTicket creates a new ticket with the supplied ReqType and optional data.
+func newTicket(r tReq, data interface{}) ticket {
+	return ticket{
+		t:    r,
+		data: data,
+		ack:  make(chan bool),
+		r:    make(chan error),
+	}
+}
+
+// ack attempts to send the ticket to the ticket queue.
+// First waits for acknowledgement of ticket, then waits for the return message.
+// In future, there may be a timeout around the return message.
+func (p *Pool) ack(t ticket) error {
+	p.tQ <- t
+	<-t.ack
+	return <-t.r
 }
 
 // Kill sends a kill request to the pool bus.
 // When sent, any currently running jobs have Cancel() called.
 // If the pool has already been killed or closed ErrClosedPool is returned.
 func (p *Pool) Kill() error {
-	t := ticket{
-		tReqKill, nil, make(chan error),
-	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqKill, nil))
 }
 
 // Close sends a graceful close request to the pool bus.
 // Workers will finish after the last submitted job is complete.
 // Close does not return an error if the pool is already closed.
 func (p *Pool) Close() error {
-	t := ticket{
-		tReqClose, nil, make(chan error),
-	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqClose, nil))
 }
 
 // Wait waits for the pool worker group to finish and then returns all jobs completed during execution.
@@ -120,11 +143,7 @@ func (p *Pool) Close() error {
 // or ensures a call to Pool.Close will be made.
 // Wait requests are stacked until they can be resolved in the next bus cycle.
 func (p *Pool) Wait() ([]JobResult, error) {
-	t := ticket{
-		tReqWait, nil, make(chan error),
-	}
-	p.tQ <- t
-	return p.fJ, <-t.r
+	return p.fJ, p.ack(newTicket(tReqWait, nil))
 }
 
 // Send sends the given PoolJob as a request to the pool bus.
@@ -135,21 +154,12 @@ func (p *Pool) Send(job Job) error {
 	if job == nil {
 		panic("send of nil job")
 	}
-	t := ticket{
-		tReqJob, job, make(chan error),
-	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqJob, job))
 }
 
 // Healthy returns true if the pool is healthy and able to receive further jobs.
 func (p *Pool) Healthy() bool {
-	t := ticket{
-		tReqHealthy, nil, make(chan error),
-	}
-	p.tQ <- t
-	e := <-t.r
-	if e == nil {
+	if p.ack(newTicket(tReqHealthy, nil)) == nil {
 		return true
 	}
 	return false
@@ -157,11 +167,7 @@ func (p *Pool) Healthy() bool {
 
 // Error returns the current error present in the pool.
 func (p *Pool) Error() error {
-	t := ticket{
-		tReqGetError, nil, make(chan error),
-	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqGetError, nil))
 }
 
 // Grow grows the amount of workers running in the pool by the requested amount.
@@ -170,21 +176,29 @@ func (p *Pool) Grow(Req int) error {
 	if Req == 0 {
 		return nil
 	}
-	t := ticket{
-		tReqGrow, Req, make(chan error),
+	return p.ack(newTicket(tReqGrow, Req))
+}
+
+// Shrink shrinks the amount of workers in the pool by the requested amount.
+// shrink will block until the requested amount of workers have acknowledged the request.
+// If the pool is full, acknowledgement happens after the worker finishes its current Job.
+// If the requested shrink makes the target worker count less than 1 ErrWorkerCount is returned
+func (p *Pool) Shrink(Req int) error {
+	if Req == 0 {
+		return nil
 	}
-	p.tQ <- t
-	return <-t.r
+	return p.ack(newTicket(tReqShrink, Req))
 }
 
-// WorkerState returns the current amount of running workers and the amount of requested workers.
-func (p *Pool) WorkerState() (c int, t int) {
-	return p.s.WorkerState()
+// Workers returns the current amount of running workers in the pool.
+func (p *Pool) Workers() (c int) {
+	c, _ = p.s.WorkerState()
+	return
 }
 
-// JobState returns the amount of currently executing jobs in the pool
+// Jobs returns the amount of currently executing jobs in the pool
 // and the amount of executed jobs in the pool (including failed).
-func (p *Pool) JobState() (c int, f int) {
+func (p *Pool) Jobs() (c int, f int) {
 	return p.s.JobState()
 }
 
@@ -239,6 +253,24 @@ func (p *Pool) unhealthy() bool {
 	return p.done || p.err != nil || p.closed || p.killed
 }
 
+// resolves resolves all remaining tickets by sending them the ctx error.
+// any unresolved tickets are returned, currently unused.
+func (p *Pool) resolve(ctx error, tickets ...ticket) []ticket {
+	if len(tickets) != 0 {
+		// Pop every item in tickets and send return signal to ticket
+		for {
+			if len(tickets) == 0 {
+				// No more pending message, continue with next cycle
+				break
+			}
+			var t ticket
+			t, tickets = tickets[len(tickets)-1], tickets[:len(tickets)-1]
+			t.r <- ctx
+		}
+	}
+	return []ticket{}
+}
+
 // bus is the central communication bus for the pool.
 // All pool inputs are collected here as tickets and then actioned on depending on the ticket type.
 // If the ticket is a tReqWait request they are added to the slice of pending tickets and upon pool closure.
@@ -256,6 +288,8 @@ func (p *Pool) bus() {
 			p.res(resp)
 		// Receive ticket request
 		case t := <-p.tQ:
+			// Acknowledge ticket receipt
+			close(t.ack)
 			switch t.t {
 			// New Job request
 			case tReqJob:
@@ -292,14 +326,26 @@ func (p *Pool) bus() {
 			case tReqWait:
 				pendWait = append(pendWait, t)
 			case tReqGrow:
+				i := t.data.(int)
 				if p.unhealthy() {
 					t.r <- ErrClosedPool
 				}
-				for range make([]int, t.data.(int)) {
-					p.s.IncrTarget()
-					p.startWorker()
-				}
+				p.s.IncrTarget(i)
+				p.resolveWorker()
 				t.r <- nil
+			case tReqShrink:
+				i := t.data.(int)
+				if p.unhealthy() {
+					t.r <- ErrClosedPool
+				}
+				if _, target := p.s.WorkerState(); (target - i) > 0 {
+					p.s.DecTarget(i)
+					p.resolveWorker()
+					t.r <- nil
+				} else {
+					t.r <- ErrWorkerCount
+					continue
+				}
 			// Pool is open request
 			case tReqHealthy:
 				if p.unhealthy() {
@@ -314,21 +360,30 @@ func (p *Pool) bus() {
 			}
 		// Default case resolves any pending tickets
 		default:
-			if p.done && len(pendWait) != 0 {
-				// Pop every item in pending and send return signal to ticket
-				for {
-					if len(pendWait) == 0 {
-						// No more pending message, continue with next cycle
-						break
-					}
-					var t ticket
-					t, pendWait = pendWait[len(pendWait)-1], pendWait[:len(pendWait)-1]
-					t.r <- p.err
-				}
+			if p.done {
+				pendWait = p.resolve(p.err, pendWait...)
 			}
-
 		}
 
+	}
+}
+
+// resolveWorker manages the amount of running workers by either starting or stopping workers
+// based on the difference in worker state.
+func (p *Pool) resolveWorker() {
+	c, t := p.s.WorkerState()
+	// If more workers than target
+	if c > t {
+		for range make([]int, c-t) {
+			p.stopWorker()
+		}
+		return
+	}
+	if c < t {
+		for range make([]int, t-c) {
+			p.startWorker()
+		}
+		return
 	}
 }
 
@@ -338,6 +393,13 @@ func (p *Pool) startWorker() {
 	ok := make(chan bool)
 	p.wg.Add(1)
 	go p.worker(ok)
+	<-ok
+}
+
+// stopWorker generates a shrink request and waits for the worker to acknowledge shrink
+func (p *Pool) stopWorker() {
+	ok := make(chan bool)
+	p.wS <- ok
 	<-ok
 }
 
@@ -402,7 +464,13 @@ func (p *Pool) worker(started chan bool) {
 
 			p.s.RemoveJob()
 
+		// Cancel
 		case <-p.wC:
+			return
+		// Shrink
+		case c := <-p.wS:
+			// Acknowledge shrink
+			close(c)
 			return
 		}
 	}

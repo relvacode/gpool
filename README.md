@@ -1,14 +1,13 @@
 # gPool - Pool Based Job Execution
 
-[![Build Status](https://travis-ci.org/relvacode/gpool.svg?branch=master)](https://travis-ci.org/relvacode/gpool)
+[![Build Status](https://travis-ci.org/relvacode/gpool.svg?branch=master)](https://travis-ci.org/relvacode/gpool) [![GoDoc](https://godoc.org/github.com/relvacode/gpool?status.svg)](https://godoc.org/github.com/relvacode/gpool)
 
-_gPool is a lightweight utility for managing a pool of workers._
+_gPool is a thread safe worker pool implementation_
 
 `import "github.com/relvacode/gpool"`
 
-[__API Reference__](https://godoc.org/github.com/relvacode/gpool)
-
 ## Basic Usage
+
 ```go
 	// Create a Pool with 5 workers.
 	// Workers are started on creation
@@ -33,12 +32,12 @@ _gPool is a lightweight utility for managing a pool of workers._
 	p.Close()
 
 	// Wait for the pool to finish. This will block forever if the pool is not closed.
-	jobs, e := p.Wait()
+	res, e := p.Wait()
 	// e is any error that occured within the Pool
-	// jobs is a slice of JobResults of all completed Jobs
+	// res is a slice of JobResults of all completed Jobs
 ```
-### Job
-A `Job` is a task to execute on the `Pool` that satisfied `gpool.Job`. `gpool.NewJob()` creates a interface{} that contains an `Identifier` and a execution function `JobFn` which can then be submitted to the pool.
+## Job
+A `Job` is a task to execute on the `Pool` that satisfies `gpool.Job`. `gpool.NewJob()` creates a interface{} that contains an `Identifier` and a execution function `JobFn` which can then be submitted to the pool.
 
 ```go
 // Create an Identifer, this in an interface{} which has a String() string method. 
@@ -56,10 +55,9 @@ fn := func(c chan bool) (interface{}, error) {
 Job := gpool.NewJob(i, fn)
 ```
 
-#### Cancel
-Jobs can be cancelled during execution via a channel closer.
-The execution function is given a channel which will be closed when a call to `Pool.Kill()` is made or another `Job` in the `Pool` returns an error.
-A call to `Pool.Wait()` will not continue until Jobs in the Pool have completed, so it's important for especially long-running jobs to be able to receive and action this signal in reasonable time.
+### Cancel
+The execution `JobFn` function supplied in `NewJob()` is given a channel which will be closed when a call to `Pool.Kill()` is made or another `Job` in the `Pool` returns an error. This is called via `Job.Cancel()`.
+A call to `Pool.Wait()` will not continue until all currently active Jobs in the Pool have completed, so it's important for especially long-running jobs to be able to receive and action this signal in reasonable time.
 
 ```go
 fn := func(c chan bool) (interface{}, error) {
@@ -74,25 +72,24 @@ fn := func(c chan bool) (interface{}, error) {
 }
 ```
 
-### Hooks
-A `Hook` is a function that is executed when a Pool worker starts or stops executing a `Job`. 
-Hooks are entirely optional and should not contain any real computation, primarily they should be used for logging.
+### Result
+The output from a job is a `JobResult`. This contains a unique ID, the originating Job and the duration it ran.
+Only jobs that did not return an error are returned from `Pool.Wait()`.
 
 ```go
-p := gpool.NewPool(1)
-p.Hook.Start = function(ID int, j gpool.Job) {
-  log.Println("Started", j.Identifier())
+p := NewPool(5)
+
+//...Send a few jobs and close the pool
+
+res, e := p.Wait()
+// Do something with e here
+
+// Aggregate the total duration of all Jobs
+totalDuration := time.Duration(0)
+for _, r :- range res {
+  totalDuration += r.Duration
 }
-```
 
-Hook types that are currently available:
-
-```go
-// HookStart is a function to be called when a Job starts.
-type HookStart func(ID int,j gpool.Job)
-
-// HookStop is a function to be called when a Job finishes.
-type HookStop func(ID int,res gpool.JobResult)
 ```
 
 ### Identifier
@@ -116,7 +113,7 @@ fn := func(c chan bool) (interface{}, error) {
 }
 
 // Initialise your custom Identifier with some data
-i := &CopyIdentifier{
+i := CopyIdentifier{
   Name:   "Copy file.txt",
   Source: "/src/file.txt",
   Dest:   "/dst/file.txt",
@@ -125,12 +122,55 @@ Job := gpool.NewJob(i, fn)
 
 p := gpool.NewPool(5)
 
-// Add a Pool Hook
+// Set a Pool Hook
 p.Hook.Start = func(ID int, j gpool.Job) {
-  // Check if the Idenitifer is a *CopyIdentifier. If so then print the source and destination.
+  // Check if the Idenitifer is a CopyIdentifier. If so then print the source and destination.
   if i, ok :=  j.Identifier().(*CopyIdentifier); ok {
     log.Println("Copy", i.Source, "to", i.Dest) // Outputs: Copy /src/file.txt to /dst/file.txt
   }
 }
 
+```
+
+## Bus
+
+The bus is the central communication loop which mediates input requests in a thread safe way.
+All pool requests are sent to the bus and then resolved, concurrent requests are resolved in order preventing any race conditions.
+Because of this, any blocking requests such as `Pool.Send()` will block any further requests until the send is resolved.
+
+The exception is `Pool.Wait()` where wait requests are stacked until they can be resolved.
+Wait request resolution happens every bus cycle where no other message has been received.
+
+Once started (via `NewPool()`) the bus cannot be killed, this is to prevent any message from not being acknowledged and thus causing a deadlock.
+If you have a suggestion for destroying the bus that prevents any messages from not being acknowledged please raise a pull request for the fix.
+
+## State
+
+The current state of the pool can be inspected via the methods `Pool.Jobs()` and `Pool.Workers()`. These return the current run state as integers.
+State requests are not fulfilled by the bus, instead they are managed by the internal worker state manager and protected by mutex lock.
+
+`Pool.Jobs()` returns the current amount of executing jobs and the current amount of finished jobs including failed.
+
+`Pool.Workers()` returns the current amount of running workers in the pool.
+
+## Hooks
+A `Hook` is a function that is executed when a Pool worker starts or stops executing a `Job`. 
+Hooks are entirely optional and should not contain any real computation, primarily they should be used for logging.
+They are executed by the worker and thus are called concurrently so it's important you don't introduce any race conditions because of shared access.
+
+```go
+p := gpool.NewPool(1)
+p.Hook.Start = function(ID int, j gpool.Job) {
+  log.Println("Started", j.Identifier())
+}
+```
+
+Hook types that are currently available:
+
+```go
+// HookStart is a function to be called when a Job starts.
+type HookStart func(ID int,j gpool.Job)
+
+// HookStop is a function to be called when a Job finishes.
+type HookStop func(ID int,res gpool.JobResult)
 ```

@@ -70,7 +70,8 @@ func NewPool(Workers int) *Pool {
 
 // start starts Pool workers and Pool bus
 func (p *Pool) start() {
-	for range make([]int, p.s.GetTarget()) {
+	_, t := p.s.WorkerState()
+	for range make([]int, t) {
 		p.startWorker()
 	}
 	go func() {
@@ -330,7 +331,7 @@ func (p *Pool) bus() {
 				if p.unhealthy() {
 					t.r <- ErrClosedPool
 				}
-				p.s.IncrTarget(i)
+				p.s.AdjTarget(i)
 				p.resolveWorker()
 				t.r <- nil
 			case tReqShrink:
@@ -339,7 +340,7 @@ func (p *Pool) bus() {
 					t.r <- ErrClosedPool
 				}
 				if _, target := p.s.WorkerState(); (target - i) > 0 {
-					p.s.DecTarget(i)
+					p.s.AdjTarget(-i)
 					p.resolveWorker()
 					t.r <- nil
 				} else {

@@ -138,8 +138,8 @@ The bus is the central communication loop which mediates input requests in a thr
 All pool requests are sent to the bus and then resolved, concurrent requests are resolved in order preventing any race conditions.
 Because of this, any blocking requests such as `Pool.Send()` will block any further requests until the send is resolved.
 
-The exception is `Pool.Wait()` where wait requests are stacked until they can be resolved.
-Wait request resolution happens every bus cycle where no other message has been received.
+The exception is `Pool.Wait()` where if the pool is not closed at request time, requests are stacked until the pool is complete. 
+Unless the pool is already closed in which wait requests are resolved instantly.
 
 Once started (via `NewPool()`) the bus cannot be killed, this is to prevent any message from not being acknowledged and thus causing a deadlock.
 If you have a suggestion for destroying the bus that prevents any messages from not being acknowledged please raise a pull request for the fix.

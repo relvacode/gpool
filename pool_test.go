@@ -16,6 +16,19 @@ var goodJob = func(c chan bool) (interface{}, error) {
 	return nil, nil
 }
 
+func Test_Pool_Wait(t *testing.T) {
+	p := NewPool(1)
+	ok := make(chan bool)
+	go func() {
+		p.Wait()
+		close(ok)
+	}()
+	p.Kill()
+	p.Wait()
+	p.Wait()
+	<-ok
+}
+
 func Test_Pool_JobError(t *testing.T) {
 	p := NewPool(1)
 	p.Send(NewJob(Identifier("Testing"), failJob))

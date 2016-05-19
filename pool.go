@@ -70,7 +70,8 @@ func NewPool(Workers int) *Pool {
 
 // start starts Pool workers and Pool bus
 func (p *Pool) start() {
-	for range make([]int, p.s.GetTarget()) {
+	_, t := p.s.WorkerState()
+	for range make([]int, t) {
 		p.startWorker()
 	}
 	go func() {
@@ -138,10 +139,10 @@ func (p *Pool) Close() error {
 
 // Wait waits for the pool worker group to finish and then returns all jobs completed during execution.
 // If the pool has an error it is returned here.
-// Wait will block until the pool is marked as done (via call to Pool.Close) or has an error.
+// Wait will block until all of the workers in the pool have exited.
 // As such it is important that the caller either implements a timeout around Wait,
 // or ensures a call to Pool.Close will be made.
-// Wait requests are stacked until they can be resolved in the next bus cycle.
+// If all workers have already exited Wait() is resolved instantly.
 func (p *Pool) Wait() ([]JobResult, error) {
 	return p.fJ, p.ack(newTicket(tReqWait, nil))
 }
@@ -209,7 +210,7 @@ type jobRequest struct {
 
 // close closes the pool if not already closed.
 // Returns true if the pool was closed.
-func (p *Pool) close(kill bool) bool {
+func (p *Pool) close(kill bool, tickets ...ticket) bool {
 	if !p.killed && kill {
 		p.killed = true
 		if p.err == nil {
@@ -283,6 +284,8 @@ func (p *Pool) bus() {
 		case <-p.wD:
 			p.close(false)
 			p.done = true
+			// Workers are done so resolve all wait tickets
+			pendWait = p.resolve(p.err, pendWait...)
 		// Receive worker response
 		case resp := <-p.wR:
 			p.res(resp)
@@ -324,13 +327,18 @@ func (p *Pool) bus() {
 				}
 			// Pool wait request
 			case tReqWait:
+				// If done resolve ticket instantly
+				if p.done {
+					p.resolve(p.err, t)
+					continue
+				}
 				pendWait = append(pendWait, t)
 			case tReqGrow:
 				i := t.data.(int)
 				if p.unhealthy() {
 					t.r <- ErrClosedPool
 				}
-				p.s.IncrTarget(i)
+				p.s.AdjTarget(i)
 				p.resolveWorker()
 				t.r <- nil
 			case tReqShrink:
@@ -339,7 +347,7 @@ func (p *Pool) bus() {
 					t.r <- ErrClosedPool
 				}
 				if _, target := p.s.WorkerState(); (target - i) > 0 {
-					p.s.DecTarget(i)
+					p.s.AdjTarget(-i)
 					p.resolveWorker()
 					t.r <- nil
 				} else {
@@ -357,11 +365,6 @@ func (p *Pool) bus() {
 				t.r <- p.err
 			default:
 				panic("unknown ticket type")
-			}
-		// Default case resolves any pending tickets
-		default:
-			if p.done {
-				pendWait = p.resolve(p.err, pendWait...)
 			}
 		}
 

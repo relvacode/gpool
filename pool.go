@@ -469,6 +469,7 @@ func (p *Pool) worker(started chan bool) {
 			return
 		// Shrink
 		case c := <-p.wS:
+			// Acknowledge shrink
 			close(c)
 			return
 		}

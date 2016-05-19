@@ -13,6 +13,9 @@ var ErrClosedPool = errors.New("send on closed pool")
 // ErrKilled indicates that the pool was killed by a call to Kill()
 var ErrKilled = errors.New("pool killed by signal")
 
+// ErrWorkerCount indicates that a request to modify worker size is invalid.
+var ErrWorkerCount = errors.New("invalid worker count request")
+
 // Pool is the main pool struct containing a bus and workers.
 // Pool should always be invoked via NewPool().
 type Pool struct {
@@ -21,6 +24,7 @@ type Pool struct {
 	wR chan JobResult  // Return
 	wC chan struct{}   // Cancel
 	wD chan bool       // Done
+	wS chan chan bool  // Shrink
 
 	fJ []JobResult
 	iJ int // Job id
@@ -47,12 +51,16 @@ type Pool struct {
 // NewPool creates a new Pool with the given worker count.
 // Workers in the pool are started automatically.
 func NewPool(Workers int) *Pool {
+	if Workers == 0 {
+		panic("need at least one worker")
+	}
 	p := &Pool{
 		tQ: make(chan ticket),
 		wQ: make(chan jobRequest),
 		wC: make(chan struct{}),
 		wR: make(chan JobResult),
 		wD: make(chan bool),
+		wS: make(chan chan bool),
 		wg: &sync.WaitGroup{},
 		s:  newStateManager(Workers),
 	}
@@ -81,6 +89,7 @@ const (
 	tReqKill
 	tReqWait
 	tReqGrow
+	tReqShrink
 	tReqHealthy
 	tReqGetError
 )
@@ -110,7 +119,7 @@ func newTicket(r tReq, data interface{}) ticket {
 func (p *Pool) ack(t ticket) error {
 	p.tQ <- t
 	<-t.ack
-	return  <-t.r
+	return <-t.r
 }
 
 // Kill sends a kill request to the pool bus.
@@ -168,6 +177,17 @@ func (p *Pool) Grow(Req int) error {
 		return nil
 	}
 	return p.ack(newTicket(tReqGrow, Req))
+}
+
+// Shrink shrinks the amount of workers in the pool by the requested amount.
+// shrink will block until the requested amount of workers have acknowledged the request.
+// If the pool is full, acknowledgement happens after the worker finishes its current Job.
+// If the requested shrink makes the target worker count less than 1 ErrWorkerCount is returned
+func (p *Pool) Shrink(Req int) error {
+	if Req == 0 {
+		return nil
+	}
+	return p.ack(newTicket(tReqShrink, Req))
 }
 
 // WorkerState returns the current amount of running workers and the amount of requested workers.
@@ -305,14 +325,26 @@ func (p *Pool) bus() {
 			case tReqWait:
 				pendWait = append(pendWait, t)
 			case tReqGrow:
+				i := t.data.(int)
 				if p.unhealthy() {
 					t.r <- ErrClosedPool
 				}
-				for range make([]int, t.data.(int)) {
-					p.s.IncrTarget()
-					p.startWorker()
-				}
+				p.s.IncrTarget(i)
+				p.resolveWorker()
 				t.r <- nil
+			case tReqShrink:
+				i := t.data.(int)
+				if p.unhealthy() {
+					t.r <- ErrClosedPool
+				}
+				if _, target := p.s.WorkerState(); (target - i) > 0 {
+					p.s.DecTarget(i)
+					p.resolveWorker()
+					t.r <- nil
+				} else {
+					t.r <- ErrWorkerCount
+					continue
+				}
 			// Pool is open request
 			case tReqHealthy:
 				if p.unhealthy() {
@@ -335,12 +367,38 @@ func (p *Pool) bus() {
 	}
 }
 
+// resolveWorker manages the amount of running workers by either starting or stopping workers
+// based on the difference in worker state.
+func (p *Pool) resolveWorker() {
+	c, t := p.s.WorkerState()
+	// If more workers than target
+	if c > t {
+		for range make([]int, c-t) {
+			p.stopWorker()
+		}
+		return
+	}
+	if c < t {
+		for range make([]int, t-c) {
+			p.startWorker()
+		}
+		return
+	}
+}
+
 // startWorker starts a worker and waits for it to complete starting before return.
 // This prevents a race condition on call to Pool.Running() where the worker may not have completed it's state registration.
 func (p *Pool) startWorker() {
 	ok := make(chan bool)
 	p.wg.Add(1)
 	go p.worker(ok)
+	<-ok
+}
+
+// stopWorker generates a shrink request and waits for the worker to acknowledge shrink
+func (p *Pool) stopWorker() {
+	ok := make(chan bool)
+	p.wS <- ok
 	<-ok
 }
 
@@ -405,7 +463,12 @@ func (p *Pool) worker(started chan bool) {
 
 			p.s.RemoveJob()
 
+		// Cancel
 		case <-p.wC:
+			return
+		// Shrink
+		case c := <-p.wS:
+			close(c)
 			return
 		}
 	}

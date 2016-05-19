@@ -216,6 +216,9 @@ func Test_Pool_Shrink_Neg(t *testing.T) {
 	if e != ErrWorkerCount {
 		t.Fatal("wanted ErrWorkerCount, got", e)
 	}
+	if c, target := p.WorkerState(); c != 4 || target != 4 {
+		t.Fatal("worker state incorrect, wanted 4, got", c, target)
+	}
 	p.Kill()
 	p.Wait()
 }

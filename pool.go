@@ -190,14 +190,15 @@ func (p *Pool) Shrink(Req int) error {
 	return p.ack(newTicket(tReqShrink, Req))
 }
 
-// WorkerState returns the current amount of running workers and the amount of requested workers.
-func (p *Pool) WorkerState() (c int, t int) {
-	return p.s.WorkerState()
+// Workers returns the current amount of running workers in the pool.
+func (p *Pool) Workers() (c int) {
+	c, _ = p.s.WorkerState()
+	return
 }
 
-// JobState returns the amount of currently executing jobs in the pool
+// Jobs returns the amount of currently executing jobs in the pool
 // and the amount of executed jobs in the pool (including failed).
-func (p *Pool) JobState() (c int, f int) {
+func (p *Pool) Jobs() (c int, f int) {
 	return p.s.JobState()
 }
 

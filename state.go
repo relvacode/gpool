@@ -1,51 +1,62 @@
 package gpool
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 func newStateManager(target int) *stateManager {
 	return &stateManager{
-		0, target, 0, 0,
-		&sync.RWMutex{},
+		mtx: &sync.RWMutex{},
+		tW:  target,
 	}
 }
 
 type stateManager struct {
-	cW  int // Current workers
-	tW  int // Target workers
-	cJ  int // Current jobs
-	dJ  int // Done jobs
 	mtx *sync.RWMutex
+
+	tW int // Target workers
+	cW int // Current workers
+
+	cJ int // Current jobs
+	dJ int // Done jobs
+	eJ int // Jobs with error
+
+	wT time.Duration
 }
 
-func (s *stateManager) AddWorker() {
+func (s *stateManager) workers() (int, int) {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+	return s.cW, s.tW
+}
+
+func (s *stateManager) Worker() func() {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	s.cW++
-}
-
-func (s *stateManager) RemoveWorker() {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	if s.cW == 0 {
-		panic("negative scale counter")
+	return func() {
+		s.mtx.Lock()
+		defer s.mtx.Unlock()
+		s.cW--
 	}
-	s.cW--
 }
 
-func (s *stateManager) AddJob() {
+func (s *stateManager) Job() func(j JobResult) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 	s.cJ++
-}
-
-func (s *stateManager) RemoveJob() {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-	if s.cJ == 0 {
-		panic("negative job counter")
+	start := time.Now()
+	return func(j JobResult) {
+		s.mtx.Lock()
+		defer s.mtx.Unlock()
+		s.cJ--
+		s.dJ++
+		s.wT += time.Since(start)
+		if j.Error != nil {
+			s.eJ++
+		}
 	}
-	s.cJ--
-	s.dJ++
 }
 
 func (s *stateManager) AdjTarget(Delta int) {
@@ -57,14 +68,24 @@ func (s *stateManager) AdjTarget(Delta int) {
 	s.tW += Delta
 }
 
-func (s *stateManager) WorkerState() (int, int) {
-	s.mtx.RLock()
-	defer s.mtx.RUnlock()
-	return s.cW, s.tW
+// PoolInfo is a snapshot of the pool state.
+type PoolInfo struct {
+	Workers  int // Number of currently running or waiting workers
+	Running  int // Number of Jobs running
+	Finished int // Number of Jobs finished
+	Failed   int // Number of Jobs that contain an error
+
+	Duration time.Duration // Total Job execution duration
 }
 
-func (s *stateManager) JobState() (int, int) {
+func (s *stateManager) Stat() PoolInfo {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
-	return s.cJ, s.dJ
+	return PoolInfo{
+		s.cW,
+		s.cJ,
+		s.dJ,
+		s.eJ,
+		s.wT,
+	}
 }

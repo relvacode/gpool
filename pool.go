@@ -403,9 +403,7 @@ func (p *Pool) stopWorker() {
 // It executes the job and returns the result to the worker return channel as a JobResult.
 func (p *Pool) worker(started chan bool) {
 	defer p.wg.Done()
-
-	wT := p.s.Worker()
-	defer wT()
+	defer p.s.Worker()()
 	// Acknowledge start
 	close(started)
 	for {

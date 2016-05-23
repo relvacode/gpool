@@ -190,14 +190,14 @@ func Test_Pool_Kill(t *testing.T) {
 
 func Test_Pool_Grow(t *testing.T) {
 	p := NewPool(2)
-	if c := p.Workers(); c != 2 {
+	if c, _ := p.s.workers(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
 	}
 	e := p.Grow(2)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if c := p.Workers(); c != 4 {
+	if c, _ := p.s.workers(); c != 4 {
 		t.Fatal("wanted 4 workers, got", c)
 	}
 	p.Kill()
@@ -206,14 +206,14 @@ func Test_Pool_Grow(t *testing.T) {
 
 func Test_Pool_Shrink(t *testing.T) {
 	p := NewPool(4)
-	if c := p.Workers(); c != 4 {
+	if c, _ := p.s.workers(); c != 4 {
 		t.Fatal("wanted 4 workers, got", c)
 	}
 	e := p.Shrink(2)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if c := p.Workers(); c != 2 {
+	if c, _ := p.s.workers(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
 	}
 	p.Kill()
@@ -222,14 +222,14 @@ func Test_Pool_Shrink(t *testing.T) {
 
 func Test_Pool_Shrink_Neg(t *testing.T) {
 	p := NewPool(4)
-	if c := p.Workers(); c != 4 {
+	if c, _ := p.s.workers(); c != 4 {
 		t.Fatal("wanted 4 workers, got", c)
 	}
 	e := p.Shrink(4)
 	if e != ErrWorkerCount {
 		t.Fatal("wanted ErrWorkerCount, got", e)
 	}
-	if c := p.Workers(); c != 4 {
+	if c, _ := p.s.workers(); c != 4 {
 		t.Fatal("worker state incorrect, wanted 4, got", c)
 	}
 	p.Kill()
@@ -247,8 +247,8 @@ func Test_Pool_JobState(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if c, _ := p.Jobs(); c != 1 {
-		t.Fatal("wanted 1 running jobs, got", c)
+	if s := p.Stat(); s.Running != 1 {
+		t.Fatal("wanted 1 running jobs, got", s.Running)
 	}
 	close(ok)
 	p.Kill()
@@ -257,7 +257,7 @@ func Test_Pool_JobState(t *testing.T) {
 
 func Test_Pool_NRunning(t *testing.T) {
 	p := NewPool(2)
-	if c := p.Workers(); c != 2 {
+	if c, _ := p.s.workers(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
 	}
 	p.Kill()

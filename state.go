@@ -59,6 +59,12 @@ func (s *stateManager) Job() func(j JobResult) {
 	}
 }
 
+func (s *stateManager) SetTarget(Target int) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	s.tW = Target
+}
+
 func (s *stateManager) AdjTarget(Delta int) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()

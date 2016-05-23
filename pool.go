@@ -97,6 +97,7 @@ const (
 	tReqGrow
 	tReqShrink
 	tReqHealthy
+	tReqResize
 	tReqGetError
 )
 
@@ -105,7 +106,6 @@ const (
 type ticket struct {
 	t    tReq        // Ticket type
 	data interface{} // Ticket request data
-	ack  chan bool   // Acknowledgement channel
 	r    chan error  // Return channel
 }
 
@@ -114,7 +114,6 @@ func newTicket(r tReq, data interface{}) ticket {
 	return ticket{
 		t:    r,
 		data: data,
-		ack:  make(chan bool),
 		r:    make(chan error),
 	}
 }
@@ -124,7 +123,6 @@ func newTicket(r tReq, data interface{}) ticket {
 // In future, there may be a timeout around the return message.
 func (p *Pool) ack(t ticket) error {
 	p.tQ <- t
-	<-t.ack
 	return <-t.r
 }
 
@@ -174,6 +172,14 @@ func (p *Pool) Healthy() bool {
 // Error returns the current error present in the pool.
 func (p *Pool) Error() error {
 	return p.ack(newTicket(tReqGetError, nil))
+}
+
+// Resize changes the amount of executing workers in the pool by the requested amount.
+func (p *Pool) Resize(Req int) error {
+	if Req < 1 {
+		return nil
+	}
+	return p.ack(newTicket(tReqResize, Req))
 }
 
 // Grow grows the amount of workers running in the pool by the requested amount.
@@ -284,8 +290,6 @@ func (p *Pool) bus() {
 			p.res(resp)
 		// Receive ticket request
 		case t := <-p.tQ:
-			// Acknowledge ticket receipt
-			close(t.ack)
 			switch t.t {
 			// New Job request
 			case tReqJob:
@@ -330,6 +334,7 @@ func (p *Pool) bus() {
 				i := t.data.(int)
 				if p.unhealthy() {
 					t.r <- ErrClosedPool
+					continue
 				}
 				p.s.AdjTarget(i)
 				p.resolveWorker()
@@ -338,6 +343,7 @@ func (p *Pool) bus() {
 				i := t.data.(int)
 				if p.unhealthy() {
 					t.r <- ErrClosedPool
+					continue
 				}
 				if _, target := p.s.workers(); (target - i) > 0 {
 					p.s.AdjTarget(-i)
@@ -347,6 +353,15 @@ func (p *Pool) bus() {
 					t.r <- ErrWorkerCount
 					continue
 				}
+			case tReqResize:
+				i := t.data.(int)
+				if p.unhealthy() {
+					t.r <- ErrClosedPool
+					continue
+				}
+				p.s.SetTarget(i)
+				p.resolveWorker()
+				t.r <- nil
 			// Pool is open request
 			case tReqHealthy:
 				if p.unhealthy() {

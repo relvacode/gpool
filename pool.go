@@ -70,7 +70,7 @@ func NewPool(Workers int) *Pool {
 
 // start starts Pool workers and Pool bus
 func (p *Pool) start() {
-	_, t := p.s.WorkerState()
+	_, t := p.s.workers()
 	for range make([]int, t) {
 		p.startWorker()
 	}
@@ -79,6 +79,11 @@ func (p *Pool) start() {
 		p.wD <- true
 	}()
 	go p.bus()
+}
+
+// Stat returns a snapshot of the state of the Pool.
+func (p *Pool) Stat() PoolInfo {
+	return p.s.Stat()
 }
 
 // ticket request types
@@ -174,7 +179,7 @@ func (p *Pool) Error() error {
 // Grow grows the amount of workers running in the pool by the requested amount.
 // If the pool is closed ErrClosedPool is return.
 func (p *Pool) Grow(Req int) error {
-	if Req == 0 {
+	if Req < 1 {
 		return nil
 	}
 	return p.ack(newTicket(tReqGrow, Req))
@@ -185,22 +190,10 @@ func (p *Pool) Grow(Req int) error {
 // If the pool is full, acknowledgement happens after the worker finishes its current Job.
 // If the requested shrink makes the target worker count less than 1 ErrWorkerCount is returned
 func (p *Pool) Shrink(Req int) error {
-	if Req == 0 {
+	if Req < 1 {
 		return nil
 	}
 	return p.ack(newTicket(tReqShrink, Req))
-}
-
-// Workers returns the current amount of running workers in the pool.
-func (p *Pool) Workers() (c int) {
-	c, _ = p.s.WorkerState()
-	return
-}
-
-// Jobs returns the amount of currently executing jobs in the pool
-// and the amount of executed jobs in the pool (including failed).
-func (p *Pool) Jobs() (c int, f int) {
-	return p.s.JobState()
 }
 
 type jobRequest struct {
@@ -346,7 +339,7 @@ func (p *Pool) bus() {
 				if p.unhealthy() {
 					t.r <- ErrClosedPool
 				}
-				if _, target := p.s.WorkerState(); (target - i) > 0 {
+				if _, target := p.s.workers(); (target - i) > 0 {
 					p.s.AdjTarget(-i)
 					p.resolveWorker()
 					t.r <- nil
@@ -374,7 +367,7 @@ func (p *Pool) bus() {
 // resolveWorker manages the amount of running workers by either starting or stopping workers
 // based on the difference in worker state.
 func (p *Pool) resolveWorker() {
-	c, t := p.s.WorkerState()
+	c, t := p.s.workers()
 	// If more workers than target
 	if c > t {
 		for range make([]int, c-t) {
@@ -410,8 +403,7 @@ func (p *Pool) stopWorker() {
 // It executes the job and returns the result to the worker return channel as a JobResult.
 func (p *Pool) worker(started chan bool) {
 	defer p.wg.Done()
-	p.s.AddWorker()
-	defer p.s.RemoveWorker()
+	defer p.s.Worker()()
 	// Acknowledge start
 	close(started)
 	for {
@@ -422,7 +414,7 @@ func (p *Pool) worker(started chan bool) {
 				return
 			}
 
-			p.s.AddJob()
+			jT := p.s.Job()
 
 			if p.Hook.Start != nil {
 				p.Hook.Start(req.ID, req.Job)
@@ -465,7 +457,7 @@ func (p *Pool) worker(started chan bool) {
 				p.Hook.Stop(req.ID, j)
 			}
 
-			p.s.RemoveJob()
+			jT(j)
 
 		// Cancel
 		case <-p.wC:

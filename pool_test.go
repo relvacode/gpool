@@ -236,6 +236,20 @@ func Test_Pool_Shrink_Neg(t *testing.T) {
 	p.Wait()
 }
 
+func Test_Pool_Resize(t *testing.T) {
+	p := NewPool(1)
+	e := p.Resize(5)
+	if e != nil {
+		t.Fatal(e)
+	}
+
+	if c, _ := p.s.workers(); c != 5 {
+		t.Fatal("worker state incorrect, wanted 5, got", c)
+	}
+	p.Kill()
+	p.Wait()
+}
+
 func Test_Pool_JobState(t *testing.T) {
 	p := NewPool(1)
 	ok := make(chan bool)

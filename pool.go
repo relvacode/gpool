@@ -226,25 +226,28 @@ func (p *Pool) close(kill bool, tickets ...ticket) bool {
 }
 
 // res receives a JobResult and processes it.
-func (p *Pool) res(resp JobResult) {
+func (p *Pool) res(resp JobResult) bool {
 	if resp.Error != nil {
 		p.err = resp.Error
 		p.close(true)
-		return
+		return false
 	}
 	p.fJ = append(p.fJ, resp)
+	return true
 }
 
 // doSend tries to send a jobRequest to the worker pool.
 // If the pool is full a deadlock is possible unless we also collect the return message from the workers
-func (p *Pool) doSend(r jobRequest) {
+func (p *Pool) doSend(r jobRequest) error {
 	for {
 		select {
 		case p.wQ <- r:
 			// Request successfully sent
-			return
+			return nil
 		case resp := <-p.wR:
-			p.res(resp)
+			if !p.res(resp) {
+				return ErrClosedPool
+			}
 		}
 	}
 }
@@ -298,11 +301,10 @@ func (p *Pool) bus() {
 					continue
 				}
 				p.iJ++
-				p.doSend(jobRequest{
+				t.r <- p.doSend(jobRequest{
 					ID:  p.iJ,
 					Job: t.data.(Job),
 				})
-				t.r <- nil
 			// Pool close request
 			case tReqClose:
 				if p.done {

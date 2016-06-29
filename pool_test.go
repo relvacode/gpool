@@ -1,14 +1,17 @@
 package gpool
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
 	"time"
 )
 
+var errTestError = errors.New("test error")
+
 var failJob = func(c chan bool) (interface{}, error) {
-	return nil, fmt.Errorf("Test error function")
+	return nil, errTestError
 }
 
 var goodJob = func(c chan bool) (interface{}, error) {
@@ -83,6 +86,22 @@ func Test_Pool_JobMany_40(t *testing.T) {
 	}
 	if len(j) != 40 {
 		t.Fatal("not enough jobs, wanted 40 got", len(j))
+	}
+}
+
+func Test_Pool_JobMany_Fail(t *testing.T) {
+	p := NewPool(2)
+	for range make([]int, 40) {
+		p.Send(NewJob(Identifier("Testing"), failJob))
+	}
+	p.Close()
+	_, e := p.Wait()
+	if err, ok := e.(*PoolError); !ok {
+		t.Fatal("error is not a pool error")
+	} else {
+		if err.E != errTestError {
+			t.Fatal(err.E)
+		}
 	}
 }
 

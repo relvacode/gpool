@@ -161,6 +161,18 @@ func (p *Pool) Send(job Job) error {
 	return p.ack(newTicket(tReqJob, job))
 }
 
+// SendWithAck performs the same action as Send but returns an error channel instead of an error.
+// Exactly one error will be sent on this channel.
+// If the job was successfully started on a worker the returned error will be nil, blocking until then.
+func (p *Pool) SendWithAck(job Job) chan error {
+	if job == nil {
+		panic("send of nil job")
+	}
+	t := newTicket(tReqJob, job)
+	p.tQ <- t
+	return t.r
+}
+
 // Healthy returns true if the pool is healthy and able to receive further jobs.
 func (p *Pool) Healthy() bool {
 	if p.ack(newTicket(tReqHealthy, nil)) == nil {

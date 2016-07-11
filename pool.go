@@ -141,7 +141,7 @@ func newTicket(r tReq, data interface{}) ticket {
 	return ticket{
 		t:    r,
 		data: data,
-		r:    make(chan error),
+		r:    make(chan error, 1),
 	}
 }
 
@@ -463,9 +463,9 @@ cycle:
 
 		cases := []reflect.SelectCase{
 			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(tick.C)}, // Timeout ticket
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.tQ)}, // Ticket input queue
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wR)}, // Worker return queue
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wD)}, // Worker done (wg done) queue
+			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.tQ)},   // Ticket input queue
+			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wR)},   // Worker return queue
+			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wD)},   // Worker done (wg done) queue
 		}
 
 		// If a job is ready on the queue then try to send it by adding to reflect select cases.

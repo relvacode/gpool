@@ -15,7 +15,6 @@ func (s Identifier) String() string {
 	return string(s)
 }
 
-
 // jobRequest is the request to execute a job in the Pool.
 type jobRequest struct {
 	Job Job

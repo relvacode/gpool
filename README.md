@@ -2,7 +2,7 @@
 
 [![Build Status](https://travis-ci.org/relvacode/gpool.svg?branch=master)](https://travis-ci.org/relvacode/gpool) [![GoDoc](https://godoc.org/github.com/relvacode/gpool?status.svg)](https://godoc.org/github.com/relvacode/gpool)
 
-_gPool is a thread safe worker pool implementation_
+_gPool is a thread safe queued worker pool implementation_
 
 `import "github.com/relvacode/gpool"`
 
@@ -117,20 +117,34 @@ p.Hook.Start = func(j gpool.JobState) {
 
 ## Bus
 
-The bus is the central communication loop which mediates input requests in a thread safe way.
-All pool requests are sent to the bus and then resolved, concurrent requests are resolved in order preventing any race conditions.
-
-The exception is `Pool.Wait()` where if the pool is not closed at request time, requests are stacked until the pool is complete. 
-Unless the pool is already closed in which wait requests are resolved instantly.
+The bus is the central communication loop which mediates pool input requests in a thread safe way.
+All pool requests are sent to the bus and then resolved instantly with the exception of `Pool.Wait()`, `Pool.Send()` and `Pool.Destroy` which are queued internally until they can be resolved.
 
 ## State
 
-The current state of the pool can be inspected via the methods `Pool.Jobs(State string)` and `Pool.Workers()`.
+The current state of the pool can be inspected via the methods `Pool.Jobs(State string)`, `Pool.Workers()` and `Pool.State()`.
 State requests are not fulfilled by the bus, instead they are managed by the internal worker state manager and protected by mutex lock.
 
 `Pool.Jobs(State string)` returns all jobs with the specified state (e.g: `gpool.Executing`).
 
 `Pool.Workers()` returns the current amount of running workers in the pool.
+
+`Pool.State()` returns a snapshot of the pool state in a convenient JSON encodable manner:
+
+	 {
+	 	"Jobs": [{
+	 		"ID": 1,
+	 		"Identifier": "Testing",
+	 		"State": "Executing",
+	 		"Output": null,
+	 		"Duration": 0,
+	 		"Error": null
+	 	}],
+	 	"AvailableWorkers": 1,
+	 	"ExecutionDuration": 0
+	 }
+
+
 
 ## Hooks
 A `Hook` `func(gpool.JobState)` is a function that is executed when a Pool worker starts or stops executing a `Job`. 

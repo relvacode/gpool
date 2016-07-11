@@ -5,11 +5,8 @@ import (
 	"time"
 )
 
-// HookStart is a function to be called when a Job starts.
-type HookStart func(ID int, j Job)
-
-// HookStop is a function to be called when a Job finishes.
-type HookStop func(ID int, res JobResult)
+// Hook is a function to be called when a Job starts or stops.
+type Hook func(JobState)
 
 // Identifier implements String() which can be used as an fmt.Stringer in NewPoolJob
 type Identifier string
@@ -18,10 +15,18 @@ func (s Identifier) String() string {
 	return string(s)
 }
 
-// JobResult is the result of an execution in the Pool
-type JobResult struct {
+// jobRequest is the request to execute a job in the Pool.
+type jobRequest struct {
+	Job Job
+	ID  int
+	Ack chan error // Ticket acknowledgement channel
+}
+
+// jobResult is the result of an execution in the Pool.
+type jobResult struct {
 	ID       int           // Unique Job ID
 	Job      Job           // Underlying Job
+	Output   interface{}   // Output from Job execution
 	Duration time.Duration // Execution duration
 	Error    error         // Wrapped PoolError containing the underlying error from Job.Run()
 }
@@ -41,32 +46,22 @@ func NewJob(Identifier fmt.Stringer, Fn JobFn) Job {
 
 // A Job is an interface that implements methods for execution on a pool
 type Job interface {
-	// Run the job
-	Run() error
-	// Output from the job
-	// May return nil
-	Output() interface{}
-	// A unique identifier
+	// Run the Job, the Job may output optional output and optional error.
+	Run() (interface{}, error)
+	// A unique identifier.
 	Identifier() fmt.Stringer
-	// Cancels the job during run
+	// Cancels the job during run.
 	Cancel()
 }
 
 type job struct {
 	fn JobFn
-	o  interface{}
 	i  fmt.Stringer
 	c  chan bool
 }
 
-func (j *job) Run() error {
-	o, e := j.fn(j.c)
-	j.o = o
-	return e
-}
-
-func (j *job) Output() interface{} {
-	return j.o
+func (j *job) Run() (interface{}, error) {
+	return j.fn(j.c)
 }
 
 func (j *job) Identifier() fmt.Stringer {

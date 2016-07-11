@@ -15,10 +15,19 @@ func (e PoolError) Error() string {
 	return fmt.Sprintf("%s@%d: %s", e.J.Identifier().String(), e.ID, e.E.Error())
 }
 
-func newPoolError(req *jobRequest, Error error) *PoolError {
-	return &PoolError{
+func newPoolError(req *jobRequest, Error error) PoolError {
+	return PoolError{
 		ID: req.ID,
 		J:  req.Job,
 		E:  Error,
 	}
+}
+
+// RealError tries to return the underlying error from a PoolError.
+// If the supplied error is not PoolError then the original error is returned.
+func RealError(e error) error {
+	if v, ok := e.(PoolError); ok {
+		return v.E
+	}
+	return e
 }

@@ -3,10 +3,10 @@ package gpool
 import "testing"
 
 func Test_Worker_Defer(t *testing.T) {
-	sm := newStateManager(0)
+	sm := newMgr(0)
 
 	func() {
-		f := sm.Worker()
+		f := sm.setWorker()
 		defer f()
 
 		c, _ := sm.workers()

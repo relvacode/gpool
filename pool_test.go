@@ -1,6 +1,7 @@
 package gpool
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -34,45 +35,31 @@ func Test_Pool_Wait(t *testing.T) {
 
 func Test_Pool_JobError(t *testing.T) {
 	p := NewPool(1)
+	defer p.Destroy()
 	p.Send(NewJob(Identifier("Testing"), failJob))
 	e := p.Close()
 	if e != nil {
 		t.Fatal(e)
 	}
-	j, e := p.Wait()
+	e = p.Wait()
 	if e == nil {
 		t.Fatal("Nil error")
+	} else if RealError(e) != errTestError {
+		t.Fatalf("%#v", RealError(e))
+		t.Fatal("wrong error ", RealError(e), e)
 	}
 	t.Log(e)
-	if len(j) > 0 {
-		t.Fatal("Job present in completed jobs")
+	if len(p.Jobs(Finished)) > 0 {
+		t.Fatal("Job present in Finished jobs")
 	}
-}
-
-func Test_Pool_JobResultID(t *testing.T) {
-	p := NewPool(1)
-	p.Send(NewJob(Identifier("Testing"), goodJob))
-	p.Send(NewJob(Identifier("Testing"), goodJob))
-	e := p.Close()
-	if e != nil {
-		t.Fatal(e)
-	}
-	j, e := p.Wait()
-	if e != nil {
-		t.Fatal(e)
-	}
-	if len(j) != 2 {
-		t.Fatal("not enough jobs, wanted 2 got", len(j))
-	}
-	for i, v := range j {
-		if i+1 != v.ID {
-			t.Fatal("wrong ID, wanted", i+1, "got", v.ID)
-		}
+	if len(p.Jobs(Failed)) != 1 {
+		t.Fatal("Job not present in Failed jobs")
 	}
 }
 
 func Test_Pool_JobMany_40(t *testing.T) {
 	p := NewPool(10)
+	defer p.Destroy()
 	for range make([]int, 40) {
 		p.Send(NewJob(Identifier("Testing"), goodJob))
 	}
@@ -80,23 +67,25 @@ func Test_Pool_JobMany_40(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	j, e := p.Wait()
+	e = p.Wait()
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(j) != 40 {
-		t.Fatal("not enough jobs, wanted 40 got", len(j))
+	s := p.State()
+	if len(s.Jobs) != 40 {
+		t.Fatal("not enough jobs, wanted 40 got", len(s.Jobs))
 	}
 }
 
 func Test_Pool_JobMany_Fail(t *testing.T) {
 	p := NewPool(2)
+	defer p.Destroy()
 	for range make([]int, 40) {
 		p.Send(NewJob(Identifier("Testing"), failJob))
 	}
 	p.Close()
-	_, e := p.Wait()
-	if err, ok := e.(*PoolError); !ok {
+	e := p.Wait()
+	if err, ok := e.(PoolError); !ok {
 		t.Fatal("error is not a pool error")
 	} else {
 		if err.E != errTestError {
@@ -107,6 +96,7 @@ func Test_Pool_JobMany_Fail(t *testing.T) {
 
 func Test_Pool_JobMany_1(t *testing.T) {
 	p := NewPool(1)
+	defer p.Destroy()
 	for range make([]int, 20) {
 		p.Send(NewJob(Identifier("Testing"), goodJob))
 	}
@@ -114,17 +104,19 @@ func Test_Pool_JobMany_1(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	j, e := p.Wait()
+	e = p.Wait()
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(j) != 20 {
-		t.Fatal("not enough jobs, wanted 20 got", len(j))
+	s := p.State()
+	if len(s.Jobs) != 20 {
+		t.Fatal("not enough jobs, wanted 20 got", len(s.Jobs))
 	}
 }
 
 func Test_Pool_JobMany_Concurrent(t *testing.T) {
 	p := NewPool(1)
+	defer p.Destroy()
 	wg := &sync.WaitGroup{}
 	for range make([]int, 20) {
 		wg.Add(1)
@@ -138,17 +130,19 @@ func Test_Pool_JobMany_Concurrent(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	j, e := p.Wait()
+	e = p.Wait()
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(j) != 20 {
-		t.Fatal("not enough jobs, wanted 20 got", len(j))
+	s := p.State()
+	if len(s.Jobs) != 20 {
+		t.Fatal("not enough jobs, wanted 20 got", len(s.Jobs))
 	}
 }
 
 func Test_Pool_Healthy(t *testing.T) {
 	p := NewPool(1)
+	defer p.Destroy()
 	if ok := p.Healthy(); !ok {
 		t.Fatal("pool unexpectedly closed")
 	}
@@ -163,6 +157,7 @@ func Test_Pool_Healthy(t *testing.T) {
 
 func Test_Pool_Error(t *testing.T) {
 	p := NewPool(1)
+	defer p.Destroy()
 	e := p.Send(NewJob(Identifier("Testing"), failJob))
 	if e != nil {
 		t.Fatal(e)
@@ -171,7 +166,7 @@ func Test_Pool_Error(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = p.Wait()
+	e = p.Wait()
 	if e == nil {
 		t.Fatal("expected error")
 	}
@@ -184,6 +179,7 @@ func Test_Pool_Error(t *testing.T) {
 
 func Test_Pool_Kill(t *testing.T) {
 	p := NewPool(1)
+	defer p.Destroy()
 	cancelled := make(chan bool)
 	p.Send(NewJob(Identifier("Testing"), func(c chan bool) (interface{}, error) {
 		<-c
@@ -201,7 +197,7 @@ func Test_Pool_Kill(t *testing.T) {
 	if e != nil {
 		t.Fatal("expected error, got", e)
 	}
-	_, e = p.Wait()
+	e = p.Wait()
 	if e != ErrKilled {
 		t.Fatal("expected ErrKilled, got", e)
 	}
@@ -209,14 +205,15 @@ func Test_Pool_Kill(t *testing.T) {
 
 func Test_Pool_Grow(t *testing.T) {
 	p := NewPool(2)
-	if c, _ := p.s.workers(); c != 2 {
+	defer p.Destroy()
+	if c, _ := p.mgr.workers(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
 	}
 	e := p.Grow(2)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if c, _ := p.s.workers(); c != 4 {
+	if c, _ := p.mgr.workers(); c != 4 {
 		t.Fatal("wanted 4 workers, got", c)
 	}
 	p.Kill()
@@ -225,14 +222,15 @@ func Test_Pool_Grow(t *testing.T) {
 
 func Test_Pool_Shrink(t *testing.T) {
 	p := NewPool(4)
-	if c, _ := p.s.workers(); c != 4 {
+	defer p.Destroy()
+	if c, _ := p.mgr.workers(); c != 4 {
 		t.Fatal("wanted 4 workers, got", c)
 	}
 	e := p.Shrink(2)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if c, _ := p.s.workers(); c != 2 {
+	if c, _ := p.mgr.workers(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
 	}
 	p.Kill()
@@ -241,14 +239,15 @@ func Test_Pool_Shrink(t *testing.T) {
 
 func Test_Pool_Shrink_Neg(t *testing.T) {
 	p := NewPool(4)
-	if c, _ := p.s.workers(); c != 4 {
+	defer p.Destroy()
+	if c, _ := p.mgr.workers(); c != 4 {
 		t.Fatal("wanted 4 workers, got", c)
 	}
 	e := p.Shrink(4)
 	if e != ErrWorkerCount {
 		t.Fatal("wanted ErrWorkerCount, got", e)
 	}
-	if c, _ := p.s.workers(); c != 4 {
+	if c, _ := p.mgr.workers(); c != 4 {
 		t.Fatal("worker state incorrect, wanted 4, got", c)
 	}
 	p.Kill()
@@ -257,20 +256,22 @@ func Test_Pool_Shrink_Neg(t *testing.T) {
 
 func Test_Pool_Resize(t *testing.T) {
 	p := NewPool(1)
+	defer p.Destroy()
 	e := p.Resize(5)
 	if e != nil {
 		t.Fatal(e)
 	}
 
-	if c, _ := p.s.workers(); c != 5 {
+	if c, _ := p.mgr.workers(); c != 5 {
 		t.Fatal("worker state incorrect, wanted 5, got", c)
 	}
 	p.Kill()
 	p.Wait()
 }
 
-func Test_Pool_JobState(t *testing.T) {
+func Test_Pool_State(t *testing.T) {
 	p := NewPool(1)
+	defer p.Destroy()
 	ok := make(chan bool)
 	job := NewJob(Identifier("Testing"), func(c chan bool) (interface{}, error) {
 		<-ok
@@ -280,9 +281,16 @@ func Test_Pool_JobState(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	if s := p.Stat(); s.Running != 1 {
-		t.Fatal("wanted 1 running jobs, got", s.Running)
+	s := p.State()
+	b, _ := json.Marshal(s)
+	t.Log(string(b))
+	if len(s.Jobs) != 1 {
+		t.Fatalf("expected 1 job, got %s", len(s.Jobs))
 	}
+	if s.Jobs[0].State != Executing {
+		t.Fatalf("expected Executing, got %s", s.Jobs[0].State)
+	}
+
 	close(ok)
 	p.Kill()
 	p.Wait()
@@ -290,7 +298,8 @@ func Test_Pool_JobState(t *testing.T) {
 
 func Test_Pool_NRunning(t *testing.T) {
 	p := NewPool(2)
-	if c, _ := p.s.workers(); c != 2 {
+	defer p.Destroy()
+	if c, _ := p.mgr.workers(); c != 2 {
 		t.Fatal("wanted 2 workers, got", c)
 	}
 	p.Kill()
@@ -318,15 +327,14 @@ func Example() {
 	p.Close()
 
 	// Wait for the pool to finish
-	jobs, e := p.Wait()
+	e := p.Wait()
 	if e != nil {
 		// Do something with errors here
 	}
 
-	// Iterate over the completed jobs and print the output
-	for _, j := range jobs {
-		o := j.Job.Output()
-		if s, ok := o.(string); ok {
+	// Iterate over jobs that have finished and print the output
+	for _, j := range p.Jobs(Finished) {
+		if s, ok := j.Output.(string); ok {
 			fmt.Println(s) // Outputs: Hello, World!
 		}
 	}
@@ -346,9 +354,8 @@ func doBenchMarkSubmit(b *testing.B, Workers int, N int) {
 		}
 	}
 	p.Close()
-	_, e := p.Wait()
-	if e != nil {
-		b.Fatal(e)
+	if err := p.Wait(); err != nil {
+		b.Fatal(err)
 	}
 }
 

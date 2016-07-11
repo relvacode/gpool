@@ -249,12 +249,6 @@ func (p *Pool) Shrink(Req int) error {
 	return p.ack(newTicket(tReqShrink, Req))
 }
 
-type jobRequest struct {
-	Job Job
-	ID  int
-	Ack chan error
-}
-
 // res receives a JobResult and processes it.
 func (p *Pool) res(resp *jobResult) bool {
 	if resp.Error != nil {
@@ -391,6 +385,7 @@ func (p *Pool) do(t ticket) {
 	}
 }
 
+// clearQ iterates through the pending send queue and clears all requests by acknowledging them with the current pool error.
 func (p *Pool) clearQ(err error) {
 	for e := p.q.Front(); e != nil; e = e.Next() {
 		e.Value.(jobRequest).Ack <- p.err
@@ -407,9 +402,6 @@ func (p *Pool) bus() {
 
 cycle:
 	for {
-
-		//log.Println("state:", p.state, "intent:", p.intent, "queue:", p.q.Len(), "waiting:", len(p.pendWait), "destroy:", len(p.pendDestroy), "pendClose:", p.pendClose, "pendCancel:", p.pendCancel)
-
 		// If pool state is done without any intention and the queue is zero length
 		if p.state == done && p.intent == none {
 			if p.q.Len() == 0 {
@@ -470,10 +462,10 @@ cycle:
 		}
 
 		cases := []reflect.SelectCase{
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(tick.C)},
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.tQ)},
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wR)},
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wD)},
+			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(tick.C)}, // Timeout ticket
+			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.tQ)}, // Ticket input queue
+			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wR)}, // Worker return queue
+			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wD)}, // Worker done (wg done) queue
 		}
 
 		// If a job is ready on the queue then try to send it by adding to reflect select cases.

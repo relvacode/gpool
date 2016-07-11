@@ -15,7 +15,15 @@ func (s Identifier) String() string {
 	return string(s)
 }
 
-// JobResult is the result of an execution in the Pool
+
+// jobRequest is the request to execute a job in the Pool.
+type jobRequest struct {
+	Job Job
+	ID  int
+	Ack chan error // Ticket acknowledgement channel
+}
+
+// jobResult is the result of an execution in the Pool.
 type jobResult struct {
 	ID       int           // Unique Job ID
 	Job      Job           // Underlying Job

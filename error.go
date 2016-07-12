@@ -6,13 +6,13 @@ import (
 
 // PoolError is an error from a particular Job in the pool
 type PoolError struct {
-	ID int
+	ID string
 	J  Job
 	E  error
 }
 
 func (e PoolError) Error() string {
-	return fmt.Sprintf("%s@%d: %s", e.J.Identifier().String(), e.ID, e.E.Error())
+	return fmt.Sprintf("(%s) %s: %s", e.ID, e.J.Identifier().String(), e.E.Error())
 }
 
 func newPoolError(req *jobRequest, Error error) PoolError {

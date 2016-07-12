@@ -4,6 +4,7 @@ package gpool
 import (
 	"container/list"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -30,8 +31,6 @@ type Pool struct {
 	wC chan struct{}   // Cancel
 	wD chan bool       // Done
 	wS chan chan bool  // Shrink
-
-	iJ int // Job id
 
 	tQ chan ticket // Send ticket requests
 
@@ -94,7 +93,7 @@ func (p *Pool) start() {
 }
 
 // JobID returns a Job by the specified ID and whether it was found in the pool manager.
-func (p *Pool) JobID(ID int) (JobState, bool) {
+func (p *Pool) JobID(ID string) (JobState, bool) {
 	return p.mgr.ID(ID)
 }
 
@@ -306,10 +305,13 @@ func (p *Pool) do(t ticket) {
 			t.r <- ErrClosedPool
 			return
 		}
-		p.iJ++
-
+		u := uuid()
+		if u == "" {
+			t.r <- fmt.Errorf("unable to generate uuid")
+			return
+		}
 		jr := jobRequest{
-			ID:  p.iJ,
+			ID:  u,
 			Job: t.data.(Job),
 			Ack: t.r,
 		}

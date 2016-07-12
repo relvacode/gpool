@@ -38,7 +38,7 @@ type JobDuration struct {
 
 type JobState struct {
 	j          Job
-	ID         int
+	ID         string
 	Identifier fmt.Stringer
 	State      string
 
@@ -56,7 +56,7 @@ func newMgr(target int) *mgr {
 	return &mgr{
 		mtx: &sync.RWMutex{},
 		s:   &PoolState{TargetWorkers: target},
-		gs:  make(map[int]*JobState),
+		gs:  make(map[string]*JobState),
 	}
 }
 
@@ -65,7 +65,7 @@ type mgr struct {
 
 	s *PoolState
 
-	gs map[int]*JobState
+	gs map[string]*JobState
 
 	wT time.Duration
 }
@@ -94,7 +94,7 @@ func (s *mgr) Jobs() []JobState {
 }
 
 // ID gets a Job by the specified ID.
-func (s *mgr) ID(i int) (JobState, bool) {
+func (s *mgr) ID(i string) (JobState, bool) {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
 	j, ok := s.gs[i]

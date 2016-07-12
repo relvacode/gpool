@@ -12,14 +12,36 @@ type PoolState struct {
 	ExecutionDuration time.Duration
 }
 
+type StateDuration struct {
+	Started  time.Time
+	Finished time.Time
+	Duration time.Duration
+}
+
+func (s *StateDuration) Start() {
+	s.Started = time.Now()
+}
+
+func (s *StateDuration) Stop() {
+	s.Finished = time.Now()
+	s.Duration = s.Finished.Sub(s.Started)
+}
+
+type JobDuration struct {
+	Job       *StateDuration
+	Queued    *StateDuration
+	Executing *StateDuration
+}
+
 type JobState struct {
 	j          Job
 	ID         int
 	Identifier fmt.Stringer
 	State      string
 
-	Output   interface{}
-	Duration time.Duration
+	Output interface{}
+
+	Duration JobDuration
 	Error    error
 }
 
@@ -77,19 +99,34 @@ func (s *mgr) ID(i int) JobState {
 func (s *mgr) trackReq(jr jobRequest, state string) JobState {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	if v, ok := s.gs[jr.ID]; !ok {
-		j := &JobState{
+
+	var js *JobState
+	var ok bool
+	if js, ok = s.gs[jr.ID]; !ok {
+		js = &JobState{
 			j:          jr.Job,
 			ID:         jr.ID,
 			Identifier: jr.Job.Identifier(),
 			State:      state,
+			Duration: JobDuration{
+				Job:       &StateDuration{},
+				Queued:    &StateDuration{},
+				Executing: &StateDuration{},
+			},
 		}
-		s.gs[jr.ID] = j
-		return *j
+		js.Duration.Job.Start()
+		s.gs[jr.ID] = js
 	} else {
-		v.State = state
-		return *v
+		js.State = state
 	}
+	switch state {
+	case Queued:
+		js.Duration.Queued.Start()
+	case Executing:
+		js.Duration.Queued.Stop()
+		js.Duration.Executing.Start()
+	}
+	return *js
 }
 
 func (s *mgr) trackRes(jr *jobResult, state string) JobState {
@@ -99,7 +136,10 @@ func (s *mgr) trackRes(jr *jobResult, state string) JobState {
 		panic("job not tracked!")
 	} else {
 		s.wT += jr.Duration
-		v.Duration = jr.Duration
+
+		v.Duration.Executing.Stop()
+		v.Duration.Job.Stop()
+
 		v.Error = jr.Error
 		v.State = state
 		v.Output = jr.Output

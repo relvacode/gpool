@@ -15,6 +15,9 @@ var ErrClosedPool = errors.New("send on closed pool")
 // ErrKilled indicates that the pool was killed by a call to Kill()
 var ErrKilled = errors.New("pool killed by signal")
 
+// ErrCancelled indicates that the job was cancelled via call to Kill()
+var ErrCancelled = errors.New("job cancelled by request")
+
 // ErrWorkerCount indicates that a request to modify worker size is invalid.
 var ErrWorkerCount = errors.New("invalid worker count request")
 
@@ -40,6 +43,7 @@ type Pool struct {
 	// They are invoked by the worker and thus are called concurrently.
 	// The implementor should consider any race conditions for hook callbacks.
 	Hook struct {
+		Queue Hook // Job becomes queued
 		Start Hook // Job starts
 		Stop  Hook // Job stops
 	}
@@ -89,12 +93,17 @@ func (p *Pool) start() {
 	go p.bus()
 }
 
+// JobID returns a Job by the specified ID and whether it was found in the pool manager.
+func (p *Pool) JobID(ID int) (JobState, bool) {
+	return p.mgr.ID(ID)
+}
+
 // Jobs returns all Jobs with a given state.
 // State may be empty, in which case all jobs are returned.
 func (p *Pool) Jobs(State string) []JobState {
-	s := p.State()
+	s := p.mgr.Jobs()
 	r := []JobState{}
-	for _, j := range s.Jobs {
+	for _, j := range s {
 		if j.State == State || State == "" {
 			r = append(r, j)
 		}
@@ -108,7 +117,7 @@ func (p *Pool) Workers() int {
 }
 
 // State takes a snapshot of the current pool state.
-func (p *Pool) State() *PoolState {
+func (p *Pool) State() PoolState {
 	return p.mgr.State()
 }
 
@@ -305,7 +314,10 @@ func (p *Pool) do(t ticket) {
 			Ack: t.r,
 		}
 		p.q.PushBack(jr)
-		p.mgr.trackReq(jr, Queued)
+		js := p.mgr.trackReq(jr, Queued)
+		if p.Hook.Queue != nil {
+			p.Hook.Queue(js)
+		}
 	// Pool close request
 	case tReqClose:
 		if p.state > 0 {
@@ -388,7 +400,9 @@ func (p *Pool) do(t ticket) {
 // clearQ iterates through the pending send queue and clears all requests by acknowledging them with the current pool error.
 func (p *Pool) clearQ(err error) {
 	for e := p.q.Front(); e != nil; e = e.Next() {
+		p.mgr.trackReq(e.Value.(jobRequest), Failed)
 		e.Value.(jobRequest).Ack <- p.err
+		p.q.Remove(e)
 	}
 }
 
@@ -470,7 +484,7 @@ cycle:
 
 		// If a job is ready on the queue then try to send it by adding to reflect select cases.
 		elem := p.q.Front()
-		if elem != nil {
+		if elem != nil && p.state == 0 {
 			cases = append(cases,
 				reflect.SelectCase{
 					Dir: reflect.SelectSend, Chan: reflect.ValueOf(p.wQ),
@@ -565,6 +579,7 @@ func (p *Pool) worker(started chan bool) {
 
 			// Cancel wrapper
 			d := make(chan struct{})
+			var cancelled bool
 			go func() {
 				select {
 				// Job done
@@ -572,6 +587,7 @@ func (p *Pool) worker(started chan bool) {
 					return
 				// Worker cancel signal received
 				case <-p.wC:
+					cancelled = true
 					req.Job.Cancel()
 				}
 			}()
@@ -586,6 +602,8 @@ func (p *Pool) worker(started chan bool) {
 
 			if e != nil {
 				e = newPoolError(&req, e)
+			} else if cancelled {
+				e = ErrCancelled
 			}
 			j := &jobResult{
 				Job:      req.Job,

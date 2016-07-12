@@ -1,7 +1,6 @@
 package gpool
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -45,8 +44,7 @@ func Test_Pool_JobError(t *testing.T) {
 	if e == nil {
 		t.Fatal("Nil error")
 	} else if RealError(e) != errTestError {
-		t.Fatalf("%#v", RealError(e))
-		t.Fatal("wrong error ", RealError(e), e)
+		t.Fatalf("wrong error want %#v, got %#v", errTestError, RealError(e))
 	}
 	t.Log(e)
 	if len(p.Jobs(Finished)) > 0 {
@@ -71,9 +69,9 @@ func Test_Pool_JobMany_40(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s := p.State()
-	if len(s.Jobs) != 40 {
-		t.Fatal("not enough jobs, wanted 40 got", len(s.Jobs))
+	s := p.Jobs("")
+	if len(s) != 40 {
+		t.Fatal("not enough jobs, wanted 40 got", len(s))
 	}
 }
 
@@ -108,9 +106,9 @@ func Test_Pool_JobMany_1(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s := p.State()
-	if len(s.Jobs) != 20 {
-		t.Fatal("not enough jobs, wanted 20 got", len(s.Jobs))
+	s := p.Jobs("")
+	if len(s) != 20 {
+		t.Fatal("not enough jobs, wanted 20 got", len(s))
 	}
 }
 
@@ -134,9 +132,9 @@ func Test_Pool_JobMany_Concurrent(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s := p.State()
-	if len(s.Jobs) != 20 {
-		t.Fatal("not enough jobs, wanted 20 got", len(s.Jobs))
+	s := p.Jobs("")
+	if len(s) != 20 {
+		t.Fatal("not enough jobs, wanted 20 got", len(s))
 	}
 }
 
@@ -281,14 +279,12 @@ func Test_Pool_State(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	s := p.State()
-	b, _ := json.Marshal(s)
-	t.Log(string(b))
-	if len(s.Jobs) != 1 {
-		t.Fatalf("expected 1 job, got %s", len(s.Jobs))
+	s := p.Jobs("")
+	if len(s) != 1 {
+		t.Fatalf("expected 1 job, got %s", len(s))
 	}
-	if s.Jobs[0].State != Executing {
-		t.Fatalf("expected Executing, got %s", s.Jobs[0].State)
+	if s[0].State != Executing {
+		t.Fatalf("expected Executing, got %s", s[0].State)
 	}
 
 	close(ok)

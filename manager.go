@@ -7,9 +7,12 @@ import (
 )
 
 type PoolState struct {
-	Jobs              []JobState
-	AvailableWorkers  int
+	TotalJobs         int
+	RunningWorkers    int
+	TargetWorkers     int
+	QueuedDuration    time.Duration
 	ExecutionDuration time.Duration
+	TotalDuration     time.Duration
 }
 
 type StateDuration struct {
@@ -52,7 +55,7 @@ func (js JobState) Job() Job {
 func newMgr(target int) *mgr {
 	return &mgr{
 		mtx: &sync.RWMutex{},
-		tW:  target,
+		s:   &PoolState{TargetWorkers: target},
 		gs:  make(map[int]*JobState),
 	}
 }
@@ -60,8 +63,7 @@ func newMgr(target int) *mgr {
 type mgr struct {
 	mtx *sync.RWMutex
 
-	tW int // Target workers
-	cW int // Current workers
+	s *PoolState
 
 	gs map[int]*JobState
 
@@ -75,25 +77,31 @@ const (
 	Finished  string = "Finished"
 )
 
-func (s *mgr) State() *PoolState {
+func (s *mgr) State() PoolState {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+	return *s.s
+}
+
+func (s *mgr) Jobs() []JobState {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
 	r := []JobState{}
 	for _, j := range s.gs {
 		r = append(r, *j)
 	}
-	return &PoolState{
-		Jobs:              r,
-		AvailableWorkers:  s.cW,
-		ExecutionDuration: s.wT,
-	}
+	return r
 }
 
-func (s *mgr) ID(i int) JobState {
+// ID gets a Job by the specified ID.
+func (s *mgr) ID(i int) (JobState, bool) {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
-	j := s.gs[i]
-	return *j
+	j, ok := s.gs[i]
+	if !ok {
+		return JobState{}, false
+	}
+	return *j, true
 }
 
 func (s *mgr) trackReq(jr jobRequest, state string) JobState {
@@ -116,6 +124,7 @@ func (s *mgr) trackReq(jr jobRequest, state string) JobState {
 		}
 		js.Duration.Job.Start()
 		s.gs[jr.ID] = js
+		s.s.TotalJobs++
 	} else {
 		js.State = state
 	}
@@ -124,6 +133,7 @@ func (s *mgr) trackReq(jr jobRequest, state string) JobState {
 		js.Duration.Queued.Start()
 	case Executing:
 		js.Duration.Queued.Stop()
+		s.s.QueuedDuration += js.Duration.Queued.Duration
 		js.Duration.Executing.Start()
 	}
 	return *js
@@ -138,7 +148,9 @@ func (s *mgr) trackRes(jr *jobResult, state string) JobState {
 		s.wT += jr.Duration
 
 		v.Duration.Executing.Stop()
+		s.s.ExecutionDuration += v.Duration.Executing.Duration
 		v.Duration.Job.Stop()
+		s.s.TotalDuration += v.Duration.Job.Duration
 
 		v.Error = jr.Error
 		v.State = state
@@ -150,37 +162,37 @@ func (s *mgr) trackRes(jr *jobResult, state string) JobState {
 func (s *mgr) setWorker() func() {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	s.cW++
+	s.s.RunningWorkers++
 	return func() {
 		s.mtx.Lock()
 		defer s.mtx.Unlock()
-		s.cW--
+		s.s.RunningWorkers--
 	}
 }
 
 func (s *mgr) RunningWorkers() int {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
-	return s.cW
+	return s.s.RunningWorkers
 }
 
 func (s *mgr) workers() (int, int) {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
-	return s.cW, s.tW
+	return s.s.RunningWorkers, s.s.TargetWorkers
 }
 
 func (s *mgr) setWorkerTarget(Target int) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	s.tW = Target
+	s.s.TargetWorkers = Target
 }
 
 func (s *mgr) adjWorkerTarget(Delta int) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	if Delta < 0 && (s.tW-Delta) < 1 {
-		panic("requested target lower than 0")
+	if Delta < 0 && (s.s.TargetWorkers-Delta) < 1 {
+		return
 	}
-	s.tW += Delta
+	s.s.TargetWorkers += Delta
 }

@@ -2,7 +2,6 @@ package gpool
 
 import (
 	"fmt"
-	"time"
 )
 
 // Hook is a function to be called when a Job starts or stops.
@@ -24,11 +23,10 @@ type jobRequest struct {
 
 // jobResult is the result of an execution in the Pool.
 type jobResult struct {
-	ID       string        // Unique Job ID
-	Job      Job           // Underlying Job
-	Output   interface{}   // Output from Job execution
-	Duration time.Duration // Execution duration
-	Error    error         // Wrapped PoolError containing the underlying error from Job.Run()
+	ID     string      // Unique Job ID
+	Job    Job         // Underlying Job
+	Output interface{} // Output from Job execution
+	Error  error       // Wrapped PoolError containing the underlying error from Job.Run()
 }
 
 // JobFn is a function that is executed as a pool Job.

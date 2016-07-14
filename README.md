@@ -12,6 +12,9 @@ _gPool is a thread safe queued worker pool implementation_
 	// Create a Pool with 5 workers.
 	// Workers are started on creation
 	p := gpool.NewPool(5)
+	
+	// Cleanup when we are done.
+	defer p.Destroy()
 
 	// Example JobFn.
 	// After 10 seconds the job will return 'Hello, World!'
@@ -119,31 +122,6 @@ p.Hook.Start = func(j gpool.JobState) {
 
 The bus is the central communication loop which mediates pool input requests in a thread safe way.
 All pool requests are sent to the bus and then resolved instantly with the exception of `Pool.Wait()`, `Pool.Send()` and `Pool.Destroy` which are queued internally until they can be resolved.
-
-## State
-
-The current state of the pool can be inspected via the methods `Pool.Jobs(State string)`, `Pool.Workers()` and `Pool.State()`.
-State requests are not fulfilled by the bus, instead they are managed by the internal worker state manager and protected by mutex lock.
-
-`Pool.Jobs(State string)` returns all jobs with the specified state (e.g: `gpool.Executing`).
-
-`Pool.Workers()` returns the current amount of running workers in the pool.
-
-`Pool.State()` returns a snapshot of the pool state in a convenient JSON encodable manner:
-
-	 {
-	 	"Jobs": [{
-	 		"ID": 1,
-	 		"Identifier": "Testing",
-	 		"State": "Executing",
-	 		"Output": null,
-	 		"Duration": 0,
-	 		"Error": null
-	 	}],
-	 	"AvailableWorkers": 1,
-	 	"ExecutionDuration": 0
-	 }
-
 
 
 ## Hooks

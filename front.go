@@ -36,34 +36,6 @@ func NewPool(Workers int) *Pool {
 	return p
 }
 
-//// JobID returns a Job by the specified ID and whether it was found in the pool manager.
-//func (p *Pool) JobID(ID string) (JobState, bool) {
-//	return p.mgr.ID(ID)
-//}
-//
-//// Jobs returns all Jobs with a given state.
-//// State may be empty, in which case all jobs are returned.
-//func (p *Pool) Jobs(State string) []JobState {
-//	s := p.mgr.Jobs()
-//	r := []JobState{}
-//	for _, j := range s {
-//		if j.State == State || State == "" {
-//			r = append(r, j)
-//		}
-//	}
-//	return r
-//}
-//
-//// Workers returns the number of currently active workers (both executing and idle).
-//func (p *Pool) Workers() int {
-//	return p.mgr.RunningWorkers()
-//}
-//
-//// State takes a snapshot of the current pool state.
-//func (p *Pool) State() map[string]interface{} {
-//	return p.mgr.State()
-//}
-
 // ack attempts to send the ticket to the ticket queue.
 // First waits for acknowledgement of ticket, then waits for the return message.
 // In future, there may be a timeout around the return message.
@@ -89,6 +61,7 @@ func (p *Pool) Workers() int {
 // Kill sends a kill request to the pool bus.
 // When sent, any currently running jobs have Cancel() called.
 // If the pool has already been killed or closed ErrClosedPool is returned.
+// No additional jobs may be sent to the pool after Kill().
 func (p *Pool) Kill() error {
 	return p.ack(newTicket(tReqKill, nil))
 }
@@ -96,6 +69,7 @@ func (p *Pool) Kill() error {
 // Close sends a graceful close request to the pool bus.
 // Workers will finish after the last submitted job is complete.
 // Close does not return an error if the pool is already closed.
+// No additional jobs may be sent to the pool after Close().
 func (p *Pool) Close() error {
 	return p.ack(newTicket(tReqClose, nil))
 }
@@ -104,12 +78,11 @@ func (p *Pool) Close() error {
 // Once all workers have exited, if a Destroy() request is active then the bus will exit.
 // This means there will be no listener for pool requests,
 // you must ensure that after the pool closes via Close(), Kill() or internal error and a Destroy() request is active
-// no additional requests are sent otherwise a deadlock is possible.
+// no additional requests are sent otherwise the bus will block forever.
 func (p *Pool) Destroy() error {
 	return p.ack(newTicket(tReqDestroy, nil))
 }
 
-// Wait waits for the pool worker group to finish.
 // Wait will block until all of the workers in the pool have exited.
 // As such it is important that the caller either implements a timeout around Wait,
 // or ensures a call to Pool.Close will be made.

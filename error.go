@@ -1,6 +1,7 @@
 package gpool
 
 import (
+	"encoding/json"
 	"fmt"
 )
 
@@ -13,6 +14,10 @@ type PoolError struct {
 
 func (e PoolError) Error() string {
 	return fmt.Sprintf("(%s) %s: %s", e.ID, e.J.Identifier().String(), e.E.Error())
+}
+
+func (e PoolError) MarshalJSON() ([]byte, error) {
+	return json.Marshal(e.E.Error())
 }
 
 func newPoolError(req *jobRequest, Error error) PoolError {

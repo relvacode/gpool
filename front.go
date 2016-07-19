@@ -25,12 +25,27 @@ type Pool struct {
 
 // NewPool creates a new Pool with the given worker count.
 // Workers in the pool are started automatically.
+// If a job returns an error it is propagated to the pool and workers are cancelled.
+// The pool error is set to the error of the failed job.
 func NewPool(Workers int) *Pool {
 	if Workers == 0 {
 		panic("need at least one worker")
 	}
 	p := &Pool{
-		newPool(Workers),
+		newPool(Workers, true),
+	}
+	p.pool.start()
+	return p
+}
+
+// NewNonPropagatingPool creates a Pool with the given worker count similar to NewPool()
+// In this mode worker errors are not propagated and instead are simply added to the list of failed jobs.
+func NewNonPropagatingPool(Workers int) *Pool {
+	if Workers == 0 {
+		panic("need at least one worker")
+	}
+	p := &Pool{
+		newPool(Workers, false),
 	}
 	p.pool.start()
 	return p

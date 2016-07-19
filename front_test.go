@@ -33,7 +33,7 @@ func Test_Pool_Wait(t *testing.T) {
 	<-ok
 }
 
-func Test_Pool_Jobs(t *testing.T) {
+func Test_Propagated_Pool_Jobs(t *testing.T) {
 	p := NewPool(1)
 	defer p.Destroy()
 	p.Send(NewJob(Identifier("Testing"), failJob))
@@ -53,6 +53,30 @@ func Test_Pool_Jobs(t *testing.T) {
 	}
 	if len(p.Jobs(Failed)) != 1 {
 		t.Fatal("Job not present in Failed jobs")
+	}
+}
+
+func Test_NonPropagated_Pool_Jobs(t *testing.T) {
+	p := NewNonPropagatingPool(1)
+	defer p.Destroy()
+	p.Send(NewJob(Identifier("Testing"), failJob))
+	e := p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	e = p.Wait()
+	if e != nil {
+		t.Fatal("unexpected error")
+	}
+	if len(p.Jobs(Finished)) > 0 {
+		t.Fatal("Job present in Finished jobs")
+	}
+	fj := p.Jobs(Failed)
+	if len(fj) != 1 {
+		t.Fatal("Job not present in Failed jobs")
+	}
+	if RealError(fj[0].Error) != errTestError {
+		t.Fatal("expected test error, got ", RealError(fj[0].Error))
 	}
 }
 

@@ -15,17 +15,18 @@ const (
 	Finished  string = "Finished"
 )
 
-func newPool(target int) *pool {
+func newPool(target int, propagate bool) *pool {
 	return &pool{
-		jobs:    make(map[string]*JobState),
-		workers: make(map[int]*worker),
-		wkTgt:   target,
-		wg:      &sync.WaitGroup{},
-		tIN:     make(chan ticket),
-		jIN:     make(chan *jobRequest),
-		jOUT:    make(chan *jobResult),
-		wD:      make(chan int),
-		jQ:      list.New(),
+		jobs:      make(map[string]*JobState),
+		workers:   make(map[int]*worker),
+		wkTgt:     target,
+		wg:        &sync.WaitGroup{},
+		tIN:       make(chan ticket),
+		jIN:       make(chan *jobRequest),
+		jOUT:      make(chan *jobResult),
+		wD:        make(chan int),
+		jQ:        list.New(),
+		propagate: propagate,
 	}
 }
 
@@ -67,6 +68,8 @@ type pool struct {
 	pendCancel  *ticket
 
 	wg *sync.WaitGroup
+
+	propagate bool // Propagate job errors
 }
 
 //type dict map[string]interface{}
@@ -180,8 +183,8 @@ func (p *pool) unqueueElement(elem *list.Element) {
 	}
 }
 
-func (s *pool) putJobResult(jr *jobResult) {
-	js, ok := s.jobs[jr.ID]
+func (p *pool) putJobResult(jr *jobResult) {
+	js, ok := p.jobs[jr.ID]
 	if !ok {
 		panic("job not tracked!")
 	}
@@ -192,13 +195,20 @@ func (s *pool) putJobResult(jr *jobResult) {
 	if jr.Error != nil {
 		js.Error = jr.Error
 		js.State = Failed
-		s.jcFailed++
+		p.jcFailed++
 	} else {
 		js.State = Finished
-		s.jcFinished++
+		p.jcFinished++
 	}
-	if s.Hook.Stop != nil {
-		s.Hook.Stop(*js)
+
+	if jr.Error != nil && p.propagate {
+		p.err = jr.Error
+		if p.intent == none {
+			p.intent = wantKill
+		}
+	}
+	if p.Hook.Stop != nil {
+		p.Hook.Stop(*js)
 	}
 }
 
@@ -246,15 +256,6 @@ func (p *pool) resolveWorkers() {
 			p.wkCur++
 		}
 	}
-}
-
-// res receives a JobResult and processes it.
-func (p *pool) res(resp *jobResult) bool {
-	if resp.Error != nil {
-		p.err = resp.Error
-		return false
-	}
-	return true
 }
 
 // resolves resolves all remaining tickets by sending them the ctx error.
@@ -509,13 +510,6 @@ cycle:
 		case 2: // Worker response, error propagation
 			resp := v.Interface().(*jobResult)
 			p.putJobResult(resp)
-
-			// Check if error
-			if !p.res(resp) {
-				if p.intent == none {
-					p.intent = wantKill
-				}
-			}
 		case 3: // Worker done
 			if !ok {
 				p.state = done

@@ -106,9 +106,7 @@ func Test_Pool_Load(t *testing.T) {
 func Test_PoolError(t *testing.T) {
 	p := NewPool(2)
 	defer p.Destroy()
-	for range make([]int, 40) {
-		p.Send(NewJob(Identifier("Testing"), failJob))
-	}
+	p.Send(NewJob(Identifier("Testing"), failJob))
 	p.Close()
 	e := p.Wait()
 	if err, ok := e.(PoolError); !ok {

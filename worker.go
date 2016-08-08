@@ -50,8 +50,12 @@ func (wk *worker) Work() {
 			}
 
 			// Create a work context for this job
-			ctx := newWorkContext(s.ID)
-			ctxD := ctx.route(wk.c)
+			cancel := make(chan bool, 1)
+			ctx := &WorkContext{
+				WorkID: s.ID,
+				Cancel: cancel,
+			}
+			ctxD := route(wk.c, cancel)
 
 			// Execute Job
 			s.Error = s.Job().Run(ctx)

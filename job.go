@@ -11,10 +11,12 @@ type Hook func(*State)
 type JobFn func(*WorkContext) error
 
 // NewJob wraps a Header and JobFn to implement a Job.
-func NewJob(Header fmt.Stringer, Fn JobFn) Job {
+// AbortFn is optional and is a function to be called if the Job is aborted before it can be started.
+func NewJob(Header fmt.Stringer, RunFn JobFn, AbortFn func()) Job {
 	return &job{
-		h:  Header,
-		fn: Fn,
+		h:   Header,
+		rFn: RunFn,
+		aFn: AbortFn,
 	}
 }
 
@@ -42,14 +44,21 @@ func (s Header) String() string {
 }
 
 type job struct {
-	fn JobFn
-	h  fmt.Stringer
+	rFn JobFn
+	aFn func()
+	h   fmt.Stringer
 }
 
 func (j *job) Header() fmt.Stringer {
 	return j.h
 }
 
+func (j *job) Abort() {
+	if j.aFn != nil {
+		j.aFn()
+	}
+}
+
 func (j *job) Run(ctx *WorkContext) error {
-	return j.fn(ctx)
+	return j.rFn(ctx)
 }

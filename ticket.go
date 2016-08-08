@@ -4,19 +4,20 @@ package gpool
 type tReq int
 
 const (
-	_               tReq = iota
-	tReqJob              // 1
-	tReqClose            // 2
-	tReqKill             // 3
-	tReqWait             // 4
-	tReqGrow             // 5
-	tReqShrink           // 6
-	tReqHealthy          // 7
-	tReqResize           // 8
-	tReqGetError         // 9
-	tReqJobQuery         // 10
-	tReqWorkerQuery      // 11
-	tReqDestroy          // 12
+	_ tReq = iota
+	tReqJobStartCallback
+	tReqJobStopCallback
+	tReqJobQueueCallback
+	tReqClose
+	tReqKill
+	tReqWait
+	tReqGrow
+	tReqShrink
+	tReqHealthy
+	tReqResize
+	tReqGetError
+	tReqDestroy
+	tReqState
 )
 
 type returnPayload struct {

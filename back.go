@@ -1,7 +1,6 @@
 package gpool
 
 import (
-	"container/list"
 	"fmt"
 	"reflect"
 	"sync"
@@ -9,31 +8,33 @@ import (
 )
 
 const (
-	Queued    string = "Queued"
+	// The Job is currently waiting in the queue
+	Queued string = "Queued"
+	// The Job is currently executing
 	Executing string = "Executing"
-	Failed    string = "Failed"
-	Finished  string = "Finished"
+	// The Job failed because the Run() function returned an error
+	Failed string = "Failed"
+	// The Job finished execution without error.
+	Finished string = "Finished"
 )
 
-func newPool(target int, propagate bool) *pool {
+func newPool(target int, propagate bool, rules ...ScheduleRule) *pool {
 	return &pool{
-		jobs:      make(map[string]*JobState),
 		workers:   make(map[int]*worker),
 		wkTgt:     target,
 		wg:        &sync.WaitGroup{},
 		tIN:       make(chan ticket),
-		jIN:       make(chan *jobRequest),
-		jOUT:      make(chan *jobResult),
+		jIN:       make(chan *State),
+		jOUT:      make(chan *State),
 		wD:        make(chan int),
-		jQ:        list.New(),
 		propagate: propagate,
+		scheduler: scheduler(rules),
 	}
 }
 
 type pool struct {
-	jobs    map[string]*JobState
 	workers map[int]*worker
-	jQ      *list.List // Job queue
+	jQ      []*State // Job queue
 
 	wkID int
 
@@ -45,9 +46,9 @@ type pool struct {
 	jcFailed    int
 	jcFinished  int
 
-	jIN  chan *jobRequest
-	jOUT chan *jobResult // Return
-	wD   chan int        // Worker done signal
+	jIN  chan *State
+	jOUT chan *State // Return
+	wD   chan int    // Worker done signal
 
 	tIN chan ticket // Frontend ticket requests
 
@@ -67,52 +68,12 @@ type pool struct {
 	pendClose   *ticket
 	pendCancel  *ticket
 
+	scheduler scheduler
+
 	wg *sync.WaitGroup
 
 	propagate bool // Propagate job errors
 }
-
-//type dict map[string]interface{}
-//
-//func (s *pool) State() map[string]interface{} {
-//	s.mtx.RLock()
-//	defer s.mtx.RUnlock()
-//	return map[string]interface{}{
-//		"Workers": dict{
-//			"Running": s.wcCurrent,
-//			"Target": s.wcTarget,
-//			"Stable": s.wcCurrent == len(s.ctx),
-//		},
-//		"Jobs": dict{
-//			"Queued": s.jcQueued,
-//			"Executing": s.jcExecuting,
-//			"Finished": s.jcFinished,
-//			"Failed": s.jcFailed,
-//			"Total": len(s.gs),
-//		},
-//	}
-//}
-
-//func (s *pool) Jobs() []JobState {
-//	s.mtx.RLock()
-//	defer s.mtx.RUnlock()
-//	r := []JobState{}
-//	for _, j := range s.gs {
-//		r = append(r, *j)
-//	}
-//	return r
-//}
-//
-//// ID gets a Job by the specified ID.
-//func (s *pool) ID(i string) (JobState, bool) {
-//	s.mtx.RLock()
-//	defer s.mtx.RUnlock()
-//	j, ok := s.gs[i]
-//	if !ok {
-//		return JobState{}, false
-//	}
-//	return *j, true
-//}
 
 // start starts Pool workers and Pool bus
 func (p *pool) start() {
@@ -124,91 +85,57 @@ func (p *pool) start() {
 	go p.bus()
 }
 
-func (p *pool) jobQuery(fn jqMatcher) *returnPayload {
-	r := []JobState{}
-	for _, j := range p.jobs {
-		if fn(j) {
-			r = append(r, *j)
-		}
-	}
-	return &returnPayload{data: r}
-}
-
-func (p *pool) putQueueJobRequest(jr *jobRequest) {
-	p.jQ.PushBack(jr)
-
-	var js *JobState
-	var ok bool
-	if js, ok = p.jobs[jr.ID]; !ok {
-		js = &JobState{
-			j:          jr.Job,
-			ID:         jr.ID,
-			Identifier: jr.Job.Identifier(),
-			State:      Queued,
-			Duration: ExecutionTiming{
-				Overall:   &Timing{},
-				Queued:    &Timing{},
-				Executing: &Timing{},
-			},
-		}
-		js.Duration.Overall.Start()
-		js.Duration.Queued.Start()
-		p.jcQueued++
-		p.jobs[jr.ID] = js
-	}
+func (p *pool) putQueueState(js *State) {
+	p.jQ = append(p.jQ, js)
+	js.State = Queued
+	t := time.Now()
+	js.QueuedOn = &t
+	p.jcQueued++
 	if p.Hook.Queue != nil {
-		p.Hook.Queue(*js)
+		p.Hook.Queue(js)
+	}
+	if js.t.t == tReqJobQueueCallback {
+		js.t.r <- nil
 	}
 }
 
-func (p *pool) unqueueElement(elem *list.Element) {
-	p.jQ.Remove(elem)
-
-	jr := elem.Value.(*jobRequest)
-
-	var js *JobState
-	var ok bool
-	js, ok = p.jobs[jr.ID]
-	if !ok {
-		panic("job not tracked!")
-	}
-	js.State = Executing
-	js.Duration.Queued.Stop()
-	js.Duration.Executing.Start()
+func (p *pool) putStartState(js *State) {
 	p.jcQueued--
 	p.jcExecuting++
-
+	js.State = Executing
+	t := time.Now()
+	js.StartedOn = &t
 	if p.Hook.Start != nil {
-		p.Hook.Start(*js)
+		p.Hook.Start(js)
+	}
+	if js.t.t == tReqJobStartCallback {
+		js.t.r <- nil
 	}
 }
 
-func (p *pool) putJobResult(jr *jobResult) {
-	js, ok := p.jobs[jr.ID]
-	if !ok {
-		panic("job not tracked!")
-	}
-	js.Duration.Executing.Stop()
-	js.Duration.Overall.Stop()
-	js.Output = jr.Output
-
-	if jr.Error != nil {
-		js.Error = jr.Error
-		js.State = Failed
+func (p *pool) putStopState(js *State) {
+	p.scheduler.offload(js.Job())
+	p.jcExecuting--
+	if js.Error != nil {
 		p.jcFailed++
+		js.State = Failed
 	} else {
 		js.State = Finished
 		p.jcFinished++
 	}
-
-	if jr.Error != nil && p.propagate {
-		p.err = jr.Error
-		if p.intent == none {
+	t := time.Now()
+	js.StoppedOn = &t
+	if js.Error != nil && p.propagate {
+		p.err = js.Error
+		if p.intent == None {
 			p.intent = wantKill
 		}
 	}
 	if p.Hook.Stop != nil {
-		p.Hook.Stop(*js)
+		p.Hook.Stop(js)
+	}
+	if js.t.t == tReqJobStopCallback {
+		js.t.r <- js.Error
 	}
 }
 
@@ -260,7 +187,7 @@ func (p *pool) resolveWorkers() {
 
 // resolves resolves all remaining tickets by sending them the ctx error.
 // any unresolved tickets are returned, currently unused.
-func (p *pool) resolve(ctx error, tickets ...ticket) []ticket {
+func (p *pool) acknowledge(ctx error, tickets ...ticket) []ticket {
 	if len(tickets) != 0 {
 		// Pop every item in tickets and send return signal to ticket
 		for {
@@ -276,11 +203,36 @@ func (p *pool) resolve(ctx error, tickets ...ticket) []ticket {
 	return []ticket{}
 }
 
+type PoolState struct {
+	Error error
+
+	Executing int
+	Failed    int
+	Finished  int
+	Queued    int
+
+	Workers int
+	State   int
+}
+
+func (p *pool) stat() *PoolState {
+	return &PoolState{
+		Error:     p.err,
+		Executing: p.jcExecuting,
+		Failed:    p.jcFailed,
+		Finished:  p.jcFinished,
+		Queued:    p.jcQueued,
+
+		Workers: p.wkCur,
+		State:   p.state,
+	}
+}
+
 const (
-	none int = iota
-	closed
-	killed
-	done
+	None int = iota
+	Closed
+	Killed
+	Done
 )
 
 const (
@@ -289,10 +241,10 @@ const (
 	wantKill
 )
 
-func (p *pool) do(t ticket) {
+func (p *pool) processTicketRequest(t ticket) {
 	switch t.t {
 	// New Job request
-	case tReqJob:
+	case tReqJobStartCallback, tReqJobStopCallback, tReqJobQueueCallback:
 		if p.state > 0 {
 			t.r <- ErrClosedPool
 			return
@@ -302,10 +254,11 @@ func (p *pool) do(t ticket) {
 			t.r <- fmt.Errorf("unable to generate uuid")
 			return
 		}
-		p.putQueueJobRequest(&jobRequest{
-			ID:  u,
-			Job: t.data.(Job),
-			Ack: t.r,
+
+		p.putQueueState(&State{
+			ID: u,
+			j:  t.data.(Job),
+			t:  t,
 		})
 	// Pool close request
 	case tReqClose:
@@ -333,14 +286,14 @@ func (p *pool) do(t ticket) {
 	// Pool wait request
 	case tReqWait:
 		// If done resolve ticket instantly
-		if p.state == done {
-			p.resolve(p.err, t)
+		if p.state == Done {
+			p.acknowledge(p.err, t)
 			return
 		}
 		p.pendWait = append(p.pendWait, t)
 	case tReqGrow:
 		i := t.data.(int)
-		if p.state != none {
+		if p.state != None {
 			t.r <- ErrClosedPool
 			return
 		}
@@ -351,7 +304,7 @@ func (p *pool) do(t ticket) {
 		}
 	case tReqShrink:
 		i := t.data.(int)
-		if p.state != none {
+		if p.state != None {
 			t.r <- ErrClosedPool
 			return
 		}
@@ -362,7 +315,7 @@ func (p *pool) do(t ticket) {
 		}
 	case tReqResize:
 		i := t.data.(int)
-		if p.state != none {
+		if p.state != None {
 			t.r <- ErrClosedPool
 			return
 		}
@@ -373,7 +326,7 @@ func (p *pool) do(t ticket) {
 		}
 	// Pool is open request
 	case tReqHealthy:
-		if p.state != none {
+		if p.state != None {
 			t.r <- ErrClosedPool
 			return
 		}
@@ -381,35 +334,90 @@ func (p *pool) do(t ticket) {
 	case tReqGetError:
 		t.r <- p.err
 	case tReqDestroy:
-		if p.intent == none {
+		if p.intent == None {
 			p.intent = wantKill
 		}
 		p.pendDestroy = append(p.pendDestroy, t)
-	// Queries
-	case tReqJobQuery:
-		fn := t.data.(jqMatcher)
-		p := p.jobQuery(fn)
-		t.r <- p
-	case tReqWorkerQuery:
-		t.r <- &returnPayload{data: p.wkCur}
+	case tReqState:
+		t.r <- &returnPayload{data: p.stat()}
 	default:
 		panic(fmt.Sprintf("unexpected ticket type %d", t.t))
 	}
 }
 
-// clearQ iterates through the pending send queue and clears all requests by acknowledging them with the current pool error.
-func (p *pool) clearQ(err error) {
-	for e := p.jQ.Front(); e != nil; e = e.Next() {
-		e.Value.(*jobRequest).Ack <- p.err
-		p.jQ.Remove(e)
+// clearQ iterates through the pending send queue and clears all requests by acknowledging them with the given error.
+func (p *pool) abortQueue(err error) {
+	for _, jr := range p.jQ {
+		// Abort job is method is present
+		jr.Job().Abort()
+		// Clear ticket waiting request
+		jr.t.r <- err
 	}
+	p.jQ = []*State{}
 }
 
 // Abort signals all workers and deletes them
-func (p *pool) abort() {
+func (p *pool) abortWorkers() {
 	for i, w := range p.workers {
 		w.Close()
 		delete(p.workers, i)
+	}
+}
+
+func (p *pool) getNextJob() *State {
+	for idx, jr := range p.jQ {
+		if err := p.scheduler.evaluate(jr.Job()); err != nil {
+			continue
+		}
+		p.jQ = append(p.jQ[:idx], p.jQ[idx+1:]...)
+		return jr
+	}
+	return nil
+}
+
+func (p *pool) processPoolIntent() {
+	switch p.intent {
+	case wantKill:
+		if p.state >= Killed {
+			p.intent = None
+			return
+		}
+		if p.err == nil {
+			p.err = ErrKilled
+		}
+		if p.state < Closed {
+			close(p.jIN)
+			p.state = Closed
+		}
+		p.abortWorkers()
+		if p.pendCancel != nil {
+			p.pendCancel.r <- nil
+			p.pendCancel = nil
+		}
+
+		if p.pendClose != nil {
+			p.pendClose.r <- nil
+			p.pendClose = nil
+		}
+		p.abortQueue(p.err)
+
+		p.state = Killed
+		p.intent = None
+	case wantStop:
+		if len(p.jQ) > 0 {
+			return
+		}
+		if p.state >= Closed {
+			p.intent = None
+			return
+		}
+		close(p.jIN)
+		p.state = Closed
+		if p.pendClose != nil {
+			p.pendClose.r <- nil
+			p.pendClose = nil
+		}
+		p.intent = None
 	}
 }
 
@@ -421,99 +429,70 @@ func (p *pool) bus() {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 
+	busMsg := []reflect.SelectCase{
+		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(tick.C)}, // Timeout ticket
+		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.tIN)},  // Ticket input queue
+		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.jOUT)}, // Worker return queue
+		{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wD)},   // Worker done (wg done) queue
+	}
+
 cycle:
 	for {
+		p.processPoolIntent()
 		// If pool state is done without any intention and the queue is zero length
-		if p.state == done && p.intent == none {
-			if p.jQ.Len() != 0 {
-				p.clearQ(p.err)
+		if p.state == Done && p.intent == None {
+			if len(p.jQ) != 0 {
+				p.abortQueue(p.err)
 			}
 			// Resolve pending waits
-			p.pendWait = p.resolve(p.err, p.pendWait...)
+			p.pendWait = p.acknowledge(p.err, p.pendWait...)
 
 			// If pending destroys then resolve and exit bus.
 			if len(p.pendDestroy) > 0 {
-				p.pendDestroy = p.resolve(p.err, p.pendDestroy...)
+				p.pendDestroy = p.acknowledge(p.err, p.pendDestroy...)
 				break cycle
 			}
 		}
 
-		// Handle pool intent (close or cancel)
-		switch p.intent {
-		case wantKill:
-			if p.state >= killed {
-				p.intent = none
-				break
-			}
-			if p.err == nil {
-				p.err = ErrKilled
-			}
-			if p.state < closed {
-				close(p.jIN)
-				p.state = closed
-			}
-			p.abort()
-			if p.pendCancel != nil {
-				p.pendCancel.r <- nil
-				p.pendCancel = nil
-			}
+		cases := busMsg
 
-			if p.pendClose != nil {
-				p.pendClose.r <- nil
-				p.pendClose = nil
-			}
-			p.clearQ(p.err)
-
-			p.state = killed
-			p.intent = none
-		case wantStop:
-			if p.jQ.Len() > 0 {
-				break
-			}
-			if p.state >= closed {
-				p.intent = none
-				break
-			}
-			close(p.jIN)
-			p.state = closed
-			if p.pendClose != nil {
-				p.pendClose.r <- nil
-				p.pendClose = nil
-			}
-			p.intent = none
-		}
-
-		cases := []reflect.SelectCase{
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(tick.C)}, // Timeout ticket
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.tIN)},  // Ticket input queue
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.jOUT)}, // Worker return queue
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(p.wD)},   // Worker done (wg done) queue
-
-		}
-
+		var jr *State
 		// If a job is ready on the queue then try to send it by adding to reflect select cases.
-		elem := p.jQ.Front()
-		if elem != nil && p.state == 0 {
-			cases = append(cases,
-				reflect.SelectCase{
-					Dir: reflect.SelectSend, Chan: reflect.ValueOf(p.jIN),
-					Send: reflect.ValueOf(elem.Value),
-				})
+		if p.state == 0 && len(p.jQ) > 0 {
+			// Pop the requests from the job queue
+			jr = p.getNextJob()
+			if jr != nil {
+				cases = append(cases,
+					reflect.SelectCase{
+						Dir: reflect.SelectSend, Chan: reflect.ValueOf(p.jIN),
+						Send: reflect.ValueOf(jr),
+					})
+			}
+		}
+
+		putBack := func(j *State) {
+			if j != nil {
+				p.jQ = append([]*State{j}, p.jQ...)
+			}
 		}
 
 		c, v, ok := reflect.Select(cases)
 		switch c {
 		case 0: // Tick timeout
+			putBack(jr)
 			continue
 		case 1: // Ticket request
-			p.do(v.Interface().(ticket))
+			putBack(jr)
+			p.processTicketRequest(v.Interface().(ticket))
 		case 2: // Worker response, error propagation
-			resp := v.Interface().(*jobResult)
-			p.putJobResult(resp)
+			putBack(jr)
+			p.putStopState(v.Interface().(*State))
 		case 3: // Worker done
+			putBack(jr)
 			if !ok {
-				p.state = done
-				p.intent = none
+				// Pool done as no more workers active
+				p.state = Done
+				p.intent = None
 				p.wD = make(chan int)
 				continue
 			}
@@ -525,7 +504,7 @@ cycle:
 			p.wg.Done()
 			p.wkCur--
 		case 4: // Job sent
-			p.unqueueElement(elem)
+			p.putStartState(jr)
 			continue
 		}
 	}

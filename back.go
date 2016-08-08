@@ -18,6 +18,19 @@ const (
 	Finished string = "Finished"
 )
 
+const (
+	// Pool has no state, or is running
+	None int = iota
+	// Pool is closed, no more Job requests may be made
+	// but currently executing and queued Jobs are still managed
+	Closed
+	// Pool has been killed via error propagation or Kill() call
+	Killed
+	// Pool is done
+	// the queue is empty and all workers have exited.
+	Done
+)
+
 func newPool(target int, propagate bool, rules ...ScheduleRule) *pool {
 	return &pool{
 		workers:   make(map[int]*worker),
@@ -227,13 +240,6 @@ func (p *pool) stat() *PoolState {
 		State:   p.state,
 	}
 }
-
-const (
-	None int = iota
-	Closed
-	Killed
-	Done
-)
 
 const (
 	_ int = iota

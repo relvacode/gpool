@@ -4,9 +4,12 @@ import "time"
 
 // State is a representation of a Job state in the Pool.
 type State struct {
-	j     Job
-	t     ticket
-	ID    string
+	j Job
+	t ticket
+
+	Header string
+	ID     string
+
 	State string
 	Error error
 

@@ -3,6 +3,7 @@ package gpool
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -52,7 +53,7 @@ func TestPool_Execute_Error(t *testing.T) {
 	}
 	if err := p.Execute(j); err != nil {
 		if err != mkErr {
-			t.Fatal("wanted %s, got %", mkErr, err)
+			t.Fatalf("wanted %s, got %s", mkErr, err)
 		}
 	} else {
 		t.Fatal("expected error")
@@ -252,30 +253,35 @@ func TestPool_Hook(t *testing.T) {
 //	}
 //}
 //
-//func Test_Pool_Send_Concurrent(t *testing.T) {
-//	p := NewPool(1)
-//	defer p.Destroy()
-//	wg := &sync.WaitGroup{}
-//	for range make([]int, 20) {
-//		wg.Add(1)
-//		go func() {
-//			defer wg.Done()
-//			p.Submit(NewJob(Identifier("Testing"), goodJob))
-//		}()
-//	}
-//	wg.Wait()
-//	e := p.Close()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	e = p.Wait()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	if p.jcFinished != 20 {
-//		t.Fatal("not enough jobs, wanted 20 got", p.jcFinished)
-//	}
-//}
+func Test_Pool_Send_Concurrent(t *testing.T) {
+	p := NewPool(1, true)
+	defer p.Destroy()
+	wg := &sync.WaitGroup{}
+	for range make([]int, 5000) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := p.Queue(&testingJob{
+				name: "Concurrency_Test",
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}()
+	}
+	wg.Wait()
+	e := p.Close()
+	if e != nil {
+		t.Fatal(e)
+	}
+	e = p.Wait()
+	if e != nil {
+		t.Fatal(e)
+	}
+	if p.jcFinished != 5000 {
+		t.Fatal("not enough jobs, wanted 5000 got", p.jcFinished)
+	}
+}
+
 //
 //func Test_Pool_Healthy(t *testing.T) {
 //	p := NewPool(1)
@@ -314,40 +320,41 @@ func TestPool_Hook(t *testing.T) {
 //
 //}
 //
-//func Test_Pool_Kill(t *testing.T) {
-//	p := NewPool(1)
-//	defer p.Destroy()
-//	cancelled := make(chan bool)
-//	p.Submit(NewJob(Identifier("Testing"), func(ctx *WorkContext) (interface{}, error) {
-//		<-ctx.Cancel
-//		close(cancelled)
-//		return nil, nil
-//	}))
-//	p.Kill()
-//	select {
-//	case <-cancelled:
-//		return
-//	case <-time.After(2 * time.Second):
-//		t.Fatal("no job response after 2 seconds")
-//	}
-//	e := p.Close()
-//	if e != nil {
-//		t.Fatal("expected error, got", e)
-//	}
-//	e = p.Wait()
-//	if e != ErrKilled {
-//		t.Fatal("expected ErrKilled, got", e)
-//	}
-//}
+func Test_Pool_Kill(t *testing.T) {
+	p := NewPool(1, true)
+	defer p.Destroy()
+	cancelled := make(chan bool)
+	p.Submit(NewJob(Header("Testing"), func(ctx *WorkContext) error {
+		<-ctx.Cancel
+		close(cancelled)
+		return nil
+	}, nil))
+	p.Kill()
+	select {
+	case <-cancelled:
+		return
+	case <-time.After(2 * time.Second):
+		t.Fatal("no job response after 2 seconds")
+	}
+	e := p.Close()
+	if e != nil {
+		t.Fatal("expected error, got", e)
+	}
+	e = p.Wait()
+	if e != ErrKilled {
+		t.Fatal("expected ErrKilled, got", e)
+	}
+}
 
 func Example() {
 	// Create a Pool with 5 workers and propagation enabled.
 	p := NewPool(5, true)
 
-	// Example PoolJobFn.
-	// After 10 seconds the job will return Hello, World!
+	// Example JobFn.
+	// After 10 seconds the job will print Hello, World! and exit
 	JobFn := func(ctx *WorkContext) error {
 		<-time.After(10 * time.Second)
+		fmt.Println("Hello, World!")
 		return nil
 	}
 	// Create a Job with an Identifier

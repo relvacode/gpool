@@ -18,6 +18,8 @@ func (j testingJob) Header() fmt.Stringer {
 	return Header(j.name)
 }
 
+func (testingJob) Abort() {}
+
 func (j testingJob) Run(ctx *WorkContext) error {
 	time.Sleep(j.delay)
 	if j.wait != nil {
@@ -27,7 +29,7 @@ func (j testingJob) Run(ctx *WorkContext) error {
 }
 
 func TestPool_Execute_OK(t *testing.T) {
-	p := NewPool(1)
+	p := NewPool(1, true)
 	defer p.Destroy()
 	j := &testingJob{
 		name: "TestPool_Execute_OK",
@@ -39,7 +41,7 @@ func TestPool_Execute_OK(t *testing.T) {
 }
 
 func TestPool_Execute_Error(t *testing.T) {
-	p := NewPool(1)
+	p := NewPool(1, true)
 	defer p.Destroy()
 
 	mkErr := errors.New("execution error")
@@ -59,7 +61,7 @@ func TestPool_Execute_Error(t *testing.T) {
 }
 
 func TestPool_State(t *testing.T) {
-	p := NewPool(1)
+	p := NewPool(1, true)
 
 	ok := make(chan bool)
 
@@ -91,7 +93,7 @@ func TestPool_State(t *testing.T) {
 }
 
 func Test_Pool_Wait(t *testing.T) {
-	p := NewPool(1)
+	p := NewPool(1, true)
 	ok := make(chan bool)
 	go func() {
 		p.Wait()
@@ -104,7 +106,7 @@ func Test_Pool_Wait(t *testing.T) {
 }
 
 func TestPool_Hook(t *testing.T) {
-	p := NewPool(1)
+	p := NewPool(1, true)
 
 	var queued, started, stopped bool
 	p.Hook.Queue = func(*State) {
@@ -339,8 +341,8 @@ func TestPool_Hook(t *testing.T) {
 //}
 
 func Example() {
-	// Create a Pool with 5 workers
-	p := NewPool(5)
+	// Create a Pool with 5 workers and propagation enabled.
+	p := NewPool(5, true)
 
 	// Example PoolJobFn.
 	// After 10 seconds the job will return Hello, World!
@@ -350,7 +352,7 @@ func Example() {
 	}
 	// Create a Job with an Identifier
 	Job := NewJob(
-		Header("MyPoolJob"), JobFn,
+		Header("MyPoolJob"), JobFn, nil,
 	)
 	// Send it to the Pool
 	p.Submit(Job)

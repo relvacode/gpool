@@ -11,9 +11,6 @@ var ErrClosedPool = errors.New("send on closed pool")
 // ErrKilled indicates that the pool was killed by a call to Kill()
 var ErrKilled = errors.New("pool killed by signal")
 
-// ErrCancelled indicates that the job was cancelled via call to Kill()
-var ErrCancelled = errors.New("job cancelled by request")
-
 // ErrWorkerCount indicates that a request to modify worker size is invalid.
 var ErrWorkerCount = errors.New("invalid worker count request")
 
@@ -23,29 +20,17 @@ type Pool struct {
 	*pool
 }
 
-// NewPool creates a new Pool with the given worker count.
-// Workers in the pool are started automatically.
-// If a job returns an error it is propagated to the pool and workers are cancelled.
-// The pool error is set to the error of the failed job.
-func NewPool(Workers int) *Pool {
+// NewPool returns a new Pool with the supplied settings.
+// The number of Workers must be more than 0.
+// If Propagate is true then if a Job returns an error during execution then that error is propagated to the Pool,
+// during which all remaining Jobs are cancelled and all queued Job have Abort() called on them.
+// Rules can be supplied to provide conditional scheduling.
+func NewPool(Workers int, Propagate bool, Rules ...ScheduleRule) *Pool {
 	if Workers == 0 {
 		panic("need at least one worker")
 	}
 	p := &Pool{
-		newPool(Workers, true),
-	}
-	p.pool.start()
-	return p
-}
-
-// NewNonPropagatingPool creates a Pool with the given worker count similar to NewPool()
-// In this mode worker errors are not propagated and instead are simply added to the list of failed jobs.
-func NewNonPropagatingPool(Workers int) *Pool {
-	if Workers == 0 {
-		panic("need at least one worker")
-	}
-	p := &Pool{
-		newPool(Workers, false),
+		newPool(Workers, Propagate, Rules...),
 	}
 	p.pool.start()
 	return p
@@ -62,15 +47,6 @@ func (p *Pool) ack(t ticket) error {
 func (p *Pool) payload(t ticket) interface{} {
 	e := p.ack(t)
 	return e.(*returnPayload).data
-}
-
-func (p *Pool) Jobs(State string) []JobState {
-	return p.payload(newTicket(tReqJobQuery, stateMatcher(State))).([]JobState)
-}
-
-// Workers returns the number of running workers in the Pool.
-func (p *Pool) Workers() int {
-	return p.payload(newTicket(tReqWorkerQuery, nil)).(int)
 }
 
 // Kill sends a kill request to the pool bus.
@@ -106,27 +82,57 @@ func (p *Pool) Wait() error {
 	return p.ack(newTicket(tReqWait, nil))
 }
 
-// Send sends the given PoolJob as a request to the pool bus.
-// If the pool is closed the error ErrClosedPool is returned.
-// No error is returned if the Send() was successful.
-// A call to Send is blocked until a worker accepts the Job.
-func (p *Pool) Send(job Job) error {
+// Queue puts the given Job on the Pool queue and returns nil if the Job was successfully queued.
+func (p *Pool) Queue(job Job) error {
 	if job == nil {
 		panic("send of nil job")
 	}
-	return p.ack(newTicket(tReqJob, job))
+	return p.ack(newTicket(tReqJobQueueCallback, job))
 }
 
-// SendAsync performs the same action as Send but returns an error channel instead of an error.
-// Exactly one error will be sent on this channel.
-// If the job was successfully started on a worker the returned error will be nil, blocking until then.
-func (p *Pool) SendAsync(job Job) chan error {
+// Submit sends the given Job as a request to the pool bus.
+// Submit blocks until the Job has started on a Worker.
+func (p *Pool) Submit(job Job) error {
 	if job == nil {
 		panic("send of nil job")
 	}
-	t := newTicket(tReqJob, job)
+	return p.ack(newTicket(tReqJobStartCallback, job))
+}
+
+func (p *Pool) SubmitASync(job Job) chan error {
+	if job == nil {
+		panic("send of nil job")
+	}
+	t := newTicket(tReqJobStartCallback, job)
 	p.pool.tIN <- t
 	return t.r
+}
+
+// Execute queues and waits for a given Job to execute in the Pool.
+// If the Job was successfully scheduled then the error returned here is the error returned from Job.Run().
+func (p *Pool) Execute(job Job) error {
+	if job == nil {
+		panic("send of nil job")
+	}
+	return p.ack(newTicket(tReqJobStopCallback, job))
+}
+
+// ExecuteASync performs the same function as Execute but returns an asynchronous channel
+// for the result of Job execution.
+func (p *Pool) ExecuteASync(job Job) chan error {
+	if job == nil {
+		panic("send of nil job")
+	}
+	t := newTicket(tReqJobStopCallback, job)
+	p.pool.tIN <- t
+	return t.r
+}
+
+// State returns a snapshot of the current Pool state.
+// Including current Job status count, running workers and general pool health.
+func (p *Pool) State() *PoolState {
+	data := p.ack(newTicket(tReqState, nil))
+	return data.(*returnPayload).data.(*PoolState)
 }
 
 // Healthy returns true if the pool is healthy and able to receive further jobs.
@@ -137,7 +143,7 @@ func (p *Pool) Healthy() bool {
 	return false
 }
 
-// Error returns the current error present in the pool.
+// Error returns the current error present in the pool (if any).
 func (p *Pool) Error() error {
 	return p.ack(newTicket(tReqGetError, nil))
 }

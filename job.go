@@ -4,68 +4,52 @@ import (
 	"fmt"
 )
 
-// Hook is a function to be called when a Job starts or stops.
-type Hook func(JobState)
-
-// Identifier implements String() which can be used as an fmt.Stringer in NewPoolJob
-type Identifier string
-
-func (s Identifier) String() string {
-	return string(s)
-}
-
-// jobRequest is the request to execute a job in the Pool.
-type jobRequest struct {
-	Job Job
-	ID  string
-	Ack chan error // Ticket acknowledgement channel
-}
-
-// jobResult is the result of an execution in the Pool.
-type jobResult struct {
-	ID     string      // Unique Job ID
-	Job    Job         // Underlying Job
-	Output interface{} // Output from Job execution
-	Error  error       // Wrapped PoolError containing the underlying error from Job.Run()
-}
+// Hook is a function to be called when a Job changes state.
+type Hook func(*State)
 
 // JobFn is a function that is executed as a pool Job.
-// c is closed when a Kill() request is issued.
-type JobFn func(c chan bool) (interface{}, error)
+type JobFn func(*WorkContext) error
 
-// NewJob creates a interface using the supplied Identifier and Job function that satisfies a PoolJob
-func NewJob(Identifier fmt.Stringer, Fn JobFn) Job {
+// NewJob wraps a Header and JobFn to implement a Job.
+func NewJob(Header fmt.Stringer, Fn JobFn) Job {
 	return &job{
-		i:  Identifier,
+		h:  Header,
 		fn: Fn,
-		c:  make(chan bool, 1),
 	}
 }
 
 // A Job is an interface that implements methods for execution on a pool
 type Job interface {
-	// Run the Job, the Job may output optional output and optional error.
-	Run() (interface{}, error)
-	// A unique identifier.
-	Identifier() fmt.Stringer
-	// Cancels the job during run.
-	Cancel()
+	// An identity header that implements String()
+	Header() fmt.Stringer
+
+	// Run the Job.
+	// If propagation is enabled on the Pool then the error returned it is propagated up and the Pool is killed.
+	Run(*WorkContext) error
+
+	// Abort is used for when a Job is in the queue and needs to be removed (via call to Pool.Kill() for example).
+	// Abort is never called if the Job is already in a starting state, if it is then the Cancel channel of the
+	// WorkContext is used instead.
+	// Abort is called before the requesting ticket (Pool.Execute, Pool.Submit) is signalled.
+	Abort()
+}
+
+// Header implements fmt.Stringer and can be used as a Header for NewJob().
+type Header string
+
+func (s Header) String() string {
+	return string(s)
 }
 
 type job struct {
 	fn JobFn
-	i  fmt.Stringer
-	c  chan bool
+	h  fmt.Stringer
 }
 
-func (j *job) Run() (interface{}, error) {
-	return j.fn(j.c)
+func (j *job) Header() fmt.Stringer {
+	return j.h
 }
 
-func (j *job) Identifier() fmt.Stringer {
-	return j.i
-}
-
-func (j *job) Cancel() {
-	close(j.c)
+func (j *job) Run(ctx *WorkContext) error {
+	return j.fn(ctx)
 }

@@ -1,6 +1,6 @@
 package gpool
 
-func newWorker(ID int, in chan *jobRequest, out chan *jobResult, done chan int) *worker {
+func newWorker(ID int, in chan *State, out chan *State, done chan int) *worker {
 	return &worker{
 		i:    ID,
 		c:    make(chan bool),
@@ -13,18 +13,18 @@ func newWorker(ID int, in chan *jobRequest, out chan *jobResult, done chan int) 
 type worker struct {
 	i    int
 	c    chan bool
-	in   chan *jobRequest
-	out  chan *jobResult
+	in   chan *State
+	out  chan *State
 	done chan int
 }
 
-func (ctx *worker) Close() {
-	close(ctx.c)
+func (wk *worker) Close() {
+	close(wk.c)
 }
 
-func (ctx *worker) active() bool {
+func (wk *worker) active() bool {
 	select {
-	case _, ok := <-ctx.c:
+	case _, ok := <-wk.c:
 		return !ok
 	default:
 		return false
@@ -33,62 +33,35 @@ func (ctx *worker) active() bool {
 
 // worker is the Pool worker routine that receives jobRequests from the pool worker queue until the queue is closed.
 // It executes the job and returns the result to the worker return channel as a JobResult.
-func (ctx *worker) Work() {
+func (wk *worker) Work() {
 	// Signal this worker is done on exit
 	defer func() {
-		ctx.done <- ctx.i
+		wk.done <- wk.i
 	}()
 	for {
-		if ctx.active() {
+		if wk.active() {
 			return
 		}
 		select {
-		case req, ok := <-ctx.in:
+		case s, ok := <-wk.in:
 			// Worker queue has been closed
 			if !ok {
 				return
 			}
-			// Acknowledge ticket
-			if req.Ack != nil {
-				req.Ack <- nil
-			}
 
-			// Cancel wrapper
-			d := make(chan struct{})
-			var cancelled bool
-			go func() {
-				select {
-				// Job done
-				case <-d:
-					return
-				// Worker cancel signal received
-				case <-ctx.c:
-					cancelled = true
-					req.Job.Cancel()
-				}
-			}()
+			// Create a work context for this job
+			ctx := newWorkContext(s.ID)
+			ctxD := ctx.route(wk.c)
 
 			// Execute Job
-			o, e := req.Job.Run()
+			s.Error = s.Job().Run(ctx)
 
 			// Close cancel wrapping
-			close(d)
-
-			if e != nil {
-				e = newPoolError(req, e)
-			} else if cancelled {
-				e = ErrCancelled
-			}
-			j := &jobResult{
-				Job:    req.Job,
-				ID:     req.ID,
-				Error:  e,
-				Output: o,
-			}
+			close(ctxD)
 
 			// Send Job result to return queue
-			ctx.out <- j
-		case <-ctx.c:
+			wk.out <- s
+		case <-wk.c:
 			return
 		}
 	}

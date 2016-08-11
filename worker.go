@@ -1,21 +1,38 @@
 package gpool
 
-func newWorker(ID int, in chan *State, out chan *State, done chan int) *worker {
+// workRequest is used to signal to the pool that a worker is ready to receive another job
+type workRequest struct {
+	Worker   int
+	Response chan *State
+}
+
+// Push pushes a Job back to the worker
+func (wr *workRequest) Push(j *State) {
+	wr.Response <- j
+}
+
+func newWorker(ID int, in chan *workRequest, out chan *State, done chan int) *worker {
 	return &worker{
 		i:    ID,
 		c:    make(chan bool),
 		done: done,
-		in:   in,
+		rIN:  in,
 		out:  out,
+		req: &workRequest{
+			Worker:   ID,
+			Response: make(chan *State),
+		},
 	}
 }
 
 type worker struct {
 	i    int
 	c    chan bool
-	in   chan *State
+	rIN  chan *workRequest
 	out  chan *State
 	done chan int
+
+	req *workRequest
 }
 
 func (wk *worker) Close() {
@@ -31,30 +48,39 @@ func (wk *worker) active() bool {
 	}
 }
 
-// worker is the Pool worker routine that receives jobRequests from the pool worker queue until the queue is closed.
-// It executes the job and returns the result to the worker return channel as a JobResult.
+// Work starts listening on the worker input channel and executes jobs until the input channel is closed
+// or a cancellation signal is received.
 func (wk *worker) Work() {
 	// Signal this worker is done on exit
 	defer func() {
 		wk.done <- wk.i
 	}()
+cycle:
 	for {
 		if wk.active() {
 			return
 		}
 		select {
-		case s, ok := <-wk.in:
-			// Worker queue has been closed
+		// Work request successfully sent
+		case wk.rIN <- wk.req:
+			// Pull the return message
+			s, ok := <-wk.req.Response
+			// If state is nil then we didn't get a valid state
 			if !ok {
 				return
 			}
+			if s == nil {
+				continue cycle
+			}
 
-			// Create a work context for this job
+			// Create a work context for this job using the Job request ID
 			cancel := make(chan bool, 1)
 			ctx := &WorkContext{
 				WorkID: s.ID,
 				Cancel: cancel,
 			}
+
+			// Route worker cancellation into the work context
 			ctxD := route(wk.c, cancel)
 
 			// Execute Job

@@ -30,7 +30,7 @@ func (j testingJob) Run(ctx *WorkContext) error {
 }
 
 func TestPool_Execute_OK(t *testing.T) {
-	p := NewPool(1, true)
+	p := NewPool(1, true, nil)
 	defer p.Destroy()
 	j := &testingJob{
 		name: "TestPool_Execute_OK",
@@ -42,7 +42,7 @@ func TestPool_Execute_OK(t *testing.T) {
 }
 
 func TestPool_Execute_Error(t *testing.T) {
-	p := NewPool(1, true)
+	p := NewPool(1, true, nil)
 	defer p.Destroy()
 
 	mkErr := errors.New("execution error")
@@ -62,7 +62,7 @@ func TestPool_Execute_Error(t *testing.T) {
 }
 
 func TestPool_State(t *testing.T) {
-	p := NewPool(1, true)
+	p := NewPool(1, true, nil)
 
 	ok := make(chan bool)
 
@@ -94,7 +94,7 @@ func TestPool_State(t *testing.T) {
 }
 
 func Test_Pool_Wait(t *testing.T) {
-	p := NewPool(1, true)
+	p := NewPool(1, true, nil)
 	ok := make(chan bool)
 	go func() {
 		p.Wait()
@@ -107,7 +107,8 @@ func Test_Pool_Wait(t *testing.T) {
 }
 
 func TestPool_Hook(t *testing.T) {
-	p := NewPool(1, true)
+	p := NewPool(1, true, nil)
+	defer p.Destroy()
 
 	var queued, started, stopped bool
 	p.Hook.Queue = func(*State) {
@@ -135,6 +136,22 @@ func TestPool_Hook(t *testing.T) {
 	}
 	if !stopped {
 		t.Fatal("failed to fire stopped hook")
+	}
+}
+
+func TestPool_Load(t *testing.T) {
+	p := NewPool(5, true, nil)
+	defer p.Destroy()
+	for idx := range make([]int, 100000) {
+		p.ExecuteASync(&testingJob{
+			name: fmt.Sprintf("load.%d", idx),
+		})
+	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Wait(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -254,7 +271,7 @@ func TestPool_Hook(t *testing.T) {
 //}
 //
 func Test_Pool_Send_Concurrent(t *testing.T) {
-	p := NewPool(1, true)
+	p := NewPool(1, true, nil)
 	defer p.Destroy()
 	wg := &sync.WaitGroup{}
 	for range make([]int, 5000) {
@@ -321,7 +338,7 @@ func Test_Pool_Send_Concurrent(t *testing.T) {
 //}
 //
 func Test_Pool_Kill(t *testing.T) {
-	p := NewPool(1, true)
+	p := NewPool(1, true, nil)
 	defer p.Destroy()
 	cancelled := make(chan bool)
 	p.Submit(NewJob(Header("Testing"), func(ctx *WorkContext) error {
@@ -348,7 +365,7 @@ func Test_Pool_Kill(t *testing.T) {
 
 func Example() {
 	// Create a Pool with 5 workers and propagation enabled.
-	p := NewPool(5, true)
+	p := NewPool(5, true, FIFOScheduler{})
 
 	// Example JobFn.
 	// After 10 seconds the job will print Hello, World! and exit

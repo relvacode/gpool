@@ -391,33 +391,21 @@ func Example() {
 	}
 }
 
-//func doBenchMarkSubmit(b *testing.B, Workers int, N int) {
-//	p := NewPool(Workers)
-//	defer p.Wait()
-//	j := NewJob(Identifier("Benchmark"), func(c chan bool) (interface{}, error) {
-//		return nil, nil
-//	})
-//	b.ResetTimer()
-//	for i := 0; i < N; i++ {
-//		e := p.Submit(j)
-//		if e != nil {
-//			b.Fatal(e)
-//		}
-//	}
-//	p.Close()
-//	if err := p.Wait(); err != nil {
-//		b.Fatal(err)
-//	}
-//}
-//
-//func BenchmarkSubmit_1(b *testing.B) {
-//	doBenchMarkSubmit(b, 1, b.N)
-//}
-//
-//func BenchmarkSubmit_10(b *testing.B) {
-//	doBenchMarkSubmit(b, 10, b.N)
-//}
-//
-//func BenchmarkSubmit_100(b *testing.B) {
-//	doBenchMarkSubmit(b, 100, b.N)
-//}
+func BenchmarkPool_Execute(b *testing.B) {
+	p := NewPool(1, false, FIFOScheduler{})
+	defer p.Destroy()
+	b.ResetTimer()
+	j := testingJob{
+		name: "benchmark",
+	}
+	for i := 0; i < b.N; i++ {
+		e := p.Queue(j)
+		if e != nil {
+			b.Fatal(e)
+		}
+	}
+	p.Close()
+	if err := p.Wait(); err != nil {
+		b.Fatal(err)
+	}
+}

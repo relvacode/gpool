@@ -2,6 +2,23 @@ package gpool
 
 import "time"
 
+// PoolState is a snapshot of the state of a Pool.
+type PoolState struct {
+	Error error
+
+	// Jobs
+	Executing int
+	Failed    int
+	Finished  int
+	Queued    int
+
+	// Number of active workers
+	Workers int
+
+	// Pool status
+	State int
+}
+
 // State is a representation of a Job state in the Pool.
 type State struct {
 	j Job

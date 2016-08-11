@@ -217,18 +217,6 @@ func (p *pool) acknowledge(ctx error, tickets ...ticket) []ticket {
 	return []ticket{}
 }
 
-type PoolState struct {
-	Error error
-
-	Executing int
-	Failed    int
-	Finished  int
-	Queued    int
-
-	Workers int
-	State   int
-}
-
 func (p *pool) stat() *PoolState {
 	return &PoolState{
 		Error:     p.err,

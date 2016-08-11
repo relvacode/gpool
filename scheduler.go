@@ -5,16 +5,16 @@ import "time"
 // DefaultScheduler is the Scheduler used by the Pool if one wasn't provided.
 var DefaultScheduler = FIFOScheduler{}
 
-// AsSoonAsPossible is a 0 duration that can be used in the next evaluation timeout to indicate that the next
-// call to Evaluate() should happen as soon as possible.
+// AsSoonAsPossible is a 0 duration that can be used when returning "next" in a Scheduler Evaluation call.
+// This indicates that the next Evaluate call should happen as soon as possible.
 const AsSoonAsPossible = time.Duration(0)
 
 // Scheduler is an interface that evaluates the next Job in the queue to be executed.
 type Scheduler interface {
-	// Evaluate evaluates a slice of Jobs and returns the index of the Job that should be executed.
-	// The index is ignored if ok false in which case no Job should be scheduled.
+	// Evaluate evaluates a slice of Job States and returns the index of the Job that should be executed.
+	// The index is ignored if ok false in which case no Job should be scheduled,
+	// in this case Evaluate is not called until the "next" duration.
 	// Evaluate is called for every bus cycle where at least one Job is available to be executed.
-	// If no Job is available at this time, the pool will not call evaluate until after next duration.
 	Evaluate([]*State) (idx int, next time.Duration, ok bool)
 	// Unload unloads a Job from the scheduler when the Job stops regardless of reason.
 	Unload(*State)

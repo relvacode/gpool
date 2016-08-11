@@ -7,8 +7,7 @@ type State struct {
 	j Job
 	t ticket
 
-	Header string
-	ID     string
+	ID string
 
 	State string
 	Error error

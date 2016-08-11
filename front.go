@@ -24,13 +24,13 @@ type Pool struct {
 // The number of Workers must be more than 0.
 // If Propagate is true then if a Job returns an error during execution then that error is propagated to the Pool,
 // during which all remaining Jobs are cancelled and all queued Job have Abort() called on them.
-// Rules can be supplied to provide conditional scheduling.
-func NewPool(Workers int, Propagate bool, Rules ...ScheduleRule) *Pool {
+// An optional Scheduler can be provided, if nil then DefaultScheduler is used.
+func NewPool(Workers int, Propagate bool, Scheduler Scheduler) *Pool {
 	if Workers == 0 {
 		panic("need at least one worker")
 	}
 	p := &Pool{
-		newPool(Workers, Propagate, Rules...),
+		newPool(Workers, Propagate, Scheduler),
 	}
 	p.pool.start()
 	return p

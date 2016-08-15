@@ -8,7 +8,7 @@ import (
 // The contents of a Hook function should NOT perform any requests against the Pool
 // as a Hook is called from inside a bus cycle, there is no listener for additional requests in this period which will cause a deadlock.
 // Hook functions should be quick as calling a Hook blocks further processing of the pool.
-type Hook func(*State)
+type Hook func(*WorkState)
 
 // JobFn is a function that is executed as a pool Job.
 type JobFn func(*WorkContext) error

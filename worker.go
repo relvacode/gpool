@@ -3,15 +3,15 @@ package gpool
 // workRequest is used to signal to the pool that a worker is ready to receive another job
 type workRequest struct {
 	Worker   int
-	Response chan *State
+	Response chan *WorkState
 }
 
 // Push pushes a Job back to the worker
-func (wr *workRequest) Push(j *State) {
+func (wr *workRequest) Push(j *WorkState) {
 	wr.Response <- j
 }
 
-func newWorker(ID int, in chan *workRequest, out chan *State, done chan int) *worker {
+func newWorker(ID int, in chan *workRequest, out chan *WorkState, done chan int) *worker {
 	return &worker{
 		i:    ID,
 		c:    make(chan bool),
@@ -20,7 +20,7 @@ func newWorker(ID int, in chan *workRequest, out chan *State, done chan int) *wo
 		out:  out,
 		req: &workRequest{
 			Worker:   ID,
-			Response: make(chan *State),
+			Response: make(chan *WorkState),
 		},
 	}
 }
@@ -29,7 +29,7 @@ type worker struct {
 	i    int
 	c    chan bool
 	rIN  chan *workRequest
-	out  chan *State
+	out  chan *WorkState
 	done chan int
 
 	req *workRequest

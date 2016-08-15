@@ -41,7 +41,7 @@ func newPool(target int, propagate bool, scheduler Scheduler) *pool {
 		wg:        &sync.WaitGroup{},
 		tIN:       make(chan ticket),
 		wIN:       make(chan *workRequest),
-		wOUT:      make(chan *State),
+		wOUT:      make(chan *WorkState),
 		wEXIT:     make(chan int),
 		propagate: propagate,
 		scheduler: scheduler,
@@ -49,7 +49,7 @@ func newPool(target int, propagate bool, scheduler Scheduler) *pool {
 }
 
 type pool struct {
-	jQ []*State // Job queue
+	jQ []*WorkState // Job queue
 
 	workers map[int]*worker
 	wkID    int
@@ -62,8 +62,8 @@ type pool struct {
 	jcFinished  int
 
 	wIN   chan *workRequest
-	wOUT  chan *State // Return
-	wEXIT chan int    // Worker done signal
+	wOUT  chan *WorkState // Return
+	wEXIT chan int        // Worker done signal
 
 	tIN chan ticket // Frontend ticket requests
 
@@ -99,7 +99,7 @@ func (p *pool) start() {
 	go p.bus()
 }
 
-func (p *pool) putQueueState(js *State) {
+func (p *pool) putQueueState(js *WorkState) {
 	p.jQ = append(p.jQ, js)
 	js.State = Queued
 	t := time.Now()
@@ -113,7 +113,7 @@ func (p *pool) putQueueState(js *State) {
 	}
 }
 
-func (p *pool) putStartState(js *State) {
+func (p *pool) putStartState(js *WorkState) {
 	p.jcQueued--
 	p.jcExecuting++
 	js.State = Executing
@@ -127,7 +127,7 @@ func (p *pool) putStartState(js *State) {
 	}
 }
 
-func (p *pool) putStopState(js *State) {
+func (p *pool) putStopState(js *WorkState) {
 	p.scheduler.Unload(js)
 	p.jcExecuting--
 	if js.Error != nil {
@@ -218,8 +218,13 @@ func (p *pool) acknowledge(ctx error, tickets ...ticket) []ticket {
 }
 
 func (p *pool) stat() *PoolState {
+	var err *string
+	if p.err != nil {
+		s := p.err.Error()
+		err = &s
+	}
 	return &PoolState{
-		Error:     p.err,
+		Error:     err,
 		Executing: p.jcExecuting,
 		Failed:    p.jcFailed,
 		Finished:  p.jcFinished,
@@ -250,7 +255,7 @@ func (p *pool) processTicketRequest(t ticket) {
 			return
 		}
 
-		p.putQueueState(&State{
+		p.putQueueState(&WorkState{
 			ID: u,
 			j:  t.data.(Job),
 			t:  t,
@@ -343,7 +348,7 @@ func (p *pool) abortQueue(err error) {
 		// Clear ticket waiting request
 		jr.t.r <- err
 	}
-	p.jQ = []*State{}
+	p.jQ = []*WorkState{}
 }
 
 // Abort signals all workers and deletes them
@@ -354,7 +359,7 @@ func (p *pool) abortWorkers() {
 	}
 }
 
-func (p *pool) schedule() (j *State, next time.Duration) {
+func (p *pool) schedule() (j *WorkState, next time.Duration) {
 	if len(p.jQ) == 0 {
 		return
 	}
@@ -379,6 +384,7 @@ func (p *pool) bus() {
 
 cycle:
 	for {
+		// Processes intent from last cycle
 		switch p.intent {
 		case wantKill:
 			if p.state >= Killed {
@@ -454,7 +460,7 @@ cycle:
 			p.processTicketRequest(t)
 		case 1:
 			// Worker response, error propagation
-			s := inf.Interface().(*State)
+			s := inf.Interface().(*WorkState)
 			p.putStopState(s)
 		case 2:
 			// Worker done

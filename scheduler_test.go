@@ -54,7 +54,7 @@ func testPoolSchedulingOrder(n int, scheduler Scheduler) []int {
 	p := NewPool(1, false, scheduler)
 
 	IDs := []int{}
-	p.Hook.Stop = func(js *State) {
+	p.Hook.Stop = func(js *WorkState) {
 		if h, ok := js.Job().Header().(orderedJobHeader); ok {
 			IDs = append(IDs, h.i)
 		}

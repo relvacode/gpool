@@ -4,7 +4,9 @@ import "time"
 
 // PoolState is a snapshot of the state of a Pool.
 type PoolState struct {
-	Error error
+	// Error is the string representation of the error present in the pool.
+	// May be nil if there is no error.
+	Error *string
 
 	// Jobs
 	Executing int
@@ -19,8 +21,8 @@ type PoolState struct {
 	State int
 }
 
-// State is a representation of a Job state in the Pool.
-type State struct {
+// WorkState is a representation of a Job state in the Pool.
+type WorkState struct {
 	j Job
 	t ticket
 
@@ -35,6 +37,6 @@ type State struct {
 }
 
 // Job returns the actual Job attached to this State.
-func (s *State) Job() Job {
+func (s *WorkState) Job() Job {
 	return s.j
 }

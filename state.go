@@ -34,6 +34,9 @@ type WorkState struct {
 	QueuedOn  *time.Time
 	StartedOn *time.Time
 	StoppedOn *time.Time
+
+	QueuedDuration    *time.Duration
+	ExecutionDuration *time.Duration
 }
 
 // Job returns the actual Job attached to this State.

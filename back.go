@@ -119,6 +119,10 @@ func (p *pool) putStartState(js *WorkState) {
 	js.State = Executing
 	t := time.Now()
 	js.StartedOn = &t
+
+	qd := time.Since(*js.QueuedOn)
+	js.QueuedDuration = &qd
+
 	if p.Hook.Start != nil {
 		p.Hook.Start(js)
 	}
@@ -139,6 +143,10 @@ func (p *pool) putStopState(js *WorkState) {
 	}
 	t := time.Now()
 	js.StoppedOn = &t
+
+	ed := time.Since(*js.StartedOn)
+	js.ExecutionDuration = &ed
+
 	if js.Error != nil && p.propagate {
 		p.err = js.Error
 		if p.intent == OK {

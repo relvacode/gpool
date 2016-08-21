@@ -6,11 +6,6 @@ type workRequest struct {
 	Response chan *WorkState
 }
 
-// Push pushes a Job back to the worker
-func (wr *workRequest) Push(j *WorkState) {
-	wr.Response <- j
-}
-
 func newWorker(ID int, in chan *workRequest, out chan *WorkState, done chan int) *worker {
 	return &worker{
 		i:    ID,

@@ -9,24 +9,81 @@ import (
 )
 
 type testingJob struct {
-	name  string
-	delay time.Duration
-	wait  chan bool
-	err   error
+	name    string
+	delay   time.Duration
+	wait    chan bool
+	err     error
+	aborted bool
 }
 
-func (j testingJob) Header() fmt.Stringer {
+func (j *testingJob) Header() fmt.Stringer {
 	return Header(j.name)
 }
 
-func (testingJob) Abort() {}
+func (j *testingJob) Abort() { j.aborted = true }
 
-func (j testingJob) Run(ctx *WorkContext) error {
+func (j *testingJob) Run(ctx *WorkContext) error {
 	time.Sleep(j.delay)
 	if j.wait != nil {
 		<-j.wait
 	}
 	return j.err
+}
+
+func TestPool_Kill(t *testing.T) {
+	p := NewPool(1, true, nil)
+	defer p.Destroy()
+
+	block := make(chan bool)
+	j0 := &testingJob{
+		name: "blocking",
+		wait: block,
+	}
+	if err := p.Start(j0); err != nil {
+		t.Fatal(err)
+	}
+
+	j1 := &testingJob{
+		name: "waiting job",
+	}
+	if err := p.Queue(j1); err != nil {
+		t.Fatal(err)
+	}
+	p.Close()
+
+	if err := p.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	close(block)
+	p.Wait()
+
+	if !j1.aborted {
+		t.Fatal("job not aborted")
+	}
+}
+
+func TestPool_Error(t *testing.T) {
+	p := NewPool(1, true, nil)
+	defer p.Destroy()
+
+	pErr := errors.New("testing error")
+
+	j := &testingJob{
+		name: "TestPool_Error_Propagation",
+		err:  pErr,
+	}
+	if err := p.Start(j); err != nil {
+		t.Fatal(p)
+	}
+	p.Close()
+	p.Wait()
+	err := p.Error()
+	if err == nil {
+		t.Fatal("expected error got nil")
+	}
+	if err != pErr {
+		t.Fatalf("expected 'testing error', got %v", err)
+	}
 }
 
 func TestPool_Execute_OK(t *testing.T) {
@@ -39,6 +96,7 @@ func TestPool_Execute_OK(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Close()
+	p.Wait()
 }
 
 func TestPool_Execute_Error(t *testing.T) {
@@ -70,7 +128,7 @@ func TestPool_State(t *testing.T) {
 		name: "TestPool_State",
 		wait: ok,
 	}
-	if err := p.Submit(j); err != nil {
+	if err := p.Start(j); err != nil {
 		t.Fatal(err)
 	}
 	p.Close()
@@ -155,121 +213,6 @@ func TestPool_Load(t *testing.T) {
 	}
 }
 
-//var errTestError = errors.New("test error")
-//
-//var failJob = func(ctx *WorkContext) (interface{}, error) {
-//	return nil, errTestError
-//}
-//
-//var goodJob = func(ctx *WorkContext) (interface{}, error) {
-//	time.Sleep(time.Second / 4)
-//	return nil, nil
-//}
-//
-
-//
-//func Test_Propagated_Pool_Jobs(t *testing.T) {
-//	p := NewPool(1)
-//	defer p.Destroy()
-//	p.Submit(NewJob(Identifier("Testing"), failJob))
-//	e := p.Close()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	e = p.Wait()
-//	if e == nil {
-//		t.Fatal("Nil error")
-//	} else if RealError(e) != errTestError {
-//		t.Fatalf("wrong error want %#v, got %#v", errTestError, RealError(e))
-//	}
-//	t.Log(e)
-//	if p.jcFinished > 0 {
-//		t.Fatal("Job present in Finished jobs")
-//	}
-//	if p.jcFailed != 1 {
-//		t.Fatal("Job not present in Failed jobs")
-//	}
-//}
-//
-//func Test_NonPropagated_Pool_Jobs(t *testing.T) {
-//	p := NewNonPropagatingPool(1)
-//	defer p.Destroy()
-//	p.Submit(NewJob(Identifier("Testing"), failJob))
-//	e := p.Close()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	e = p.Wait()
-//	if e != nil {
-//		t.Fatal("unexpected error")
-//	}
-//	if p.jcFinished > 0 {
-//		t.Fatal("Job present in Finished jobs")
-//	}
-//	if p.jcFinished != 1 {
-//		t.Fatal("Job not present in Failed jobs")
-//	}
-//}
-//
-//func Test_Pool_Load(t *testing.T) {
-//	p := NewPool(runtime.NumCPU())
-//	defer p.Destroy()
-//	const wrks = 1000000
-//	for i := 0; i < wrks; i++ {
-//		p.Submit(NewJob(Identifier("Testing"), func(ctx *WorkContext) (interface{}, error) {
-//			return nil, nil
-//		}))
-//	}
-//	e := p.Close()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	e = p.Wait()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	if p.jcFinished != wrks {
-//		t.Fatal("not enough jobs, wanted ", wrks, " got", p.jcFinished)
-//	}
-//}
-//
-//func Test_PoolError(t *testing.T) {
-//	p := NewPool(2)
-//	defer p.Destroy()
-//	p.Submit(NewJob(Identifier("Testing"), failJob))
-//	p.Close()
-//	e := p.Wait()
-//	if err, ok := e.(PoolError); !ok {
-//		t.Fatal("error is not a pool error")
-//	} else {
-//		if err.E != errTestError {
-//			t.Fatal(err.E)
-//		}
-//	}
-//	if l := p.jcFailed; l != 1 {
-//		t.Fatal("wanted 1 failed job, got ", l)
-//	}
-//}
-//
-//func Test_Pool_Send_Serial(t *testing.T) {
-//	p := NewPool(1)
-//	defer p.Destroy()
-//	for range make([]int, 20) {
-//		p.Submit(NewJob(Identifier("Testing"), goodJob))
-//	}
-//	e := p.Close()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	e = p.Wait()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	if p.jcFinished != 20 {
-//		t.Fatal("not enough jobs, wanted 20 got", p.jcFinished)
-//	}
-//}
-//
 func Test_Pool_Send_Concurrent(t *testing.T) {
 	p := NewPool(1, true, nil)
 	defer p.Destroy()
@@ -299,49 +242,11 @@ func Test_Pool_Send_Concurrent(t *testing.T) {
 	}
 }
 
-//
-//func Test_Pool_Healthy(t *testing.T) {
-//	p := NewPool(1)
-//	defer p.Destroy()
-//	if ok := p.Healthy(); !ok {
-//		t.Fatal("pool unexpectedly closed")
-//	}
-//	e := p.Close()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	if ok := p.Healthy(); ok {
-//		t.Fatal("pool not closed")
-//	}
-//}
-//
-//func Test_Pool_Error(t *testing.T) {
-//	p := NewPool(1)
-//	defer p.Destroy()
-//	e := p.Submit(NewJob(Identifier("Testing"), failJob))
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	e = p.Close()
-//	if e != nil {
-//		t.Fatal(e)
-//	}
-//	e = p.Wait()
-//	if e == nil {
-//		t.Fatal("expected error")
-//	}
-//
-//	if e := p.Error(); e == nil {
-//		t.Fatal("no pool error")
-//	}
-//
-//}
-//
 func Test_Pool_Kill(t *testing.T) {
 	p := NewPool(1, true, nil)
 	defer p.Destroy()
 	cancelled := make(chan bool)
-	p.Submit(NewJob(Header("Testing"), func(ctx *WorkContext) error {
+	p.Start(NewJob(Header("Testing"), func(ctx *WorkContext) error {
 		<-ctx.Cancel
 		close(cancelled)
 		return nil
@@ -379,7 +284,7 @@ func Example() {
 		Header("MyPoolJob"), JobFn, nil,
 	)
 	// Send it to the Pool
-	p.Submit(Job)
+	p.Start(Job)
 
 	// Close the pool after all messages are sent
 	p.Close()
@@ -395,7 +300,7 @@ func BenchmarkPool_Execute(b *testing.B) {
 	p := NewPool(1, false, FIFOScheduler{})
 	defer p.Destroy()
 	b.ResetTimer()
-	j := testingJob{
+	j := &testingJob{
 		name: "benchmark",
 	}
 	for i := 0; i < b.N; i++ {

@@ -120,7 +120,7 @@ func (p *pool) putStartState(js *WorkState) {
 	t := time.Now()
 	js.StartedOn = &t
 
-	qd := time.Since(*js.QueuedOn)
+	qd := t.Sub(*js.QueuedOn)
 	js.QueuedDuration = &qd
 
 	if p.Hook.Start != nil {
@@ -144,7 +144,7 @@ func (p *pool) putStopState(js *WorkState) {
 	t := time.Now()
 	js.StoppedOn = &t
 
-	ed := time.Since(*js.StartedOn)
+	ed := t.Sub(*js.StartedOn)
 	js.ExecutionDuration = &ed
 
 	if js.Error != nil && p.propagate {
@@ -327,13 +327,6 @@ func (p *pool) processTicketRequest(t ticket) {
 		} else {
 			t.r <- ErrWorkerCount
 		}
-	// Pool is open request
-	case tReqHealthy:
-		if p.state != OK {
-			t.r <- ErrClosedPool
-			return
-		}
-		t.r <- nil
 	case tReqGetError:
 		t.r <- p.err
 	case tReqDestroy:
@@ -341,7 +334,7 @@ func (p *pool) processTicketRequest(t ticket) {
 			p.intent = wantKill
 		}
 		p.pendDestroy = append(p.pendDestroy, t)
-	case tReqState:
+	case tReqStat:
 		t.r <- &returnPayload{data: p.stat()}
 	default:
 		panic(fmt.Sprintf("unexpected ticket type %d", t.t))

@@ -194,7 +194,7 @@ func (p *pool) resolveWorkers() {
 		}
 		// otherwise start some up
 	} else {
-		for range make([]int, p.wkTgt-p.wkCur) {
+		for i := 0; i < p.wkTgt-p.wkCur; i++ {
 			// create a worker
 			p.wkID++
 			id := p.wkID

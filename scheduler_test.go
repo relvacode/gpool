@@ -9,7 +9,7 @@ import (
 
 func block(p *Pool) chan bool {
 	r := make(chan bool)
-	p.Submit(
+	p.Start(
 		NewJob(
 			Header("blocking"),
 			func(*WorkContext) error {

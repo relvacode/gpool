@@ -90,16 +90,15 @@ func (p *Pool) Queue(job Job) error {
 	return p.ack(newTicket(tReqJobQueueCallback, job))
 }
 
-// Submit sends the given Job as a request to the pool bus.
-// Submit blocks until the Job has started on a Worker.
-func (p *Pool) Submit(job Job) error {
+// Start begins queueing a Job and waits for it to start executing before returning.
+func (p *Pool) Start(job Job) error {
 	if job == nil {
 		panic("send of nil job")
 	}
 	return p.ack(newTicket(tReqJobStartCallback, job))
 }
 
-func (p *Pool) SubmitASync(job Job) chan error {
+func (p *Pool) StartAsync(job Job) chan error {
 	if job == nil {
 		panic("send of nil job")
 	}
@@ -131,16 +130,8 @@ func (p *Pool) ExecuteASync(job Job) chan error {
 // State returns a snapshot of the current Pool state.
 // Including current Job status count, running workers and general pool health.
 func (p *Pool) State() *PoolState {
-	data := p.ack(newTicket(tReqState, nil))
+	data := p.ack(newTicket(tReqStat, nil))
 	return data.(*returnPayload).data.(*PoolState)
-}
-
-// Healthy returns true if the pool is healthy and able to receive further jobs.
-func (p *Pool) Healthy() bool {
-	if p.ack(newTicket(tReqHealthy, nil)) == nil {
-		return true
-	}
-	return false
 }
 
 // Error returns the current error present in the pool (if any).

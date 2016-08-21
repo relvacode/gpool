@@ -13,11 +13,10 @@ const (
 	tReqWait
 	tReqGrow
 	tReqShrink
-	tReqHealthy
 	tReqResize
 	tReqGetError
 	tReqDestroy
-	tReqState
+	tReqStat
 )
 
 type returnPayload struct {

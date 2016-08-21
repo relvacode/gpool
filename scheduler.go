@@ -13,9 +13,9 @@ const AsSoonAsPossible = time.Duration(0)
 type Scheduler interface {
 	// Evaluate evaluates a slice of Job States and returns the index of the Job that should be executed.
 	// The index is ignored if "ok" is false in which case no Job should be scheduled,
-	// in this case Evaluate is not called until the askAgain duration has passed.
+	// in this case Evaluate is not called until the timeout duration has passed.
 	// Evaluate is called for every bus cycle where at least one Job is available to be executed.
-	Evaluate([]*WorkState) (idx int, askAgain time.Duration, ok bool)
+	Evaluate([]*WorkState) (idx int, timeout time.Duration, ok bool)
 	// Unload unloads a Job from the scheduler when the Job stops regardless of reason.
 	Unload(*WorkState)
 }
@@ -46,7 +46,7 @@ type ScheduleRule interface {
 	// Check should return false if the Job cannot be scheduled.
 	// askAgain is the duration to wait before calling Check on this rule again.
 	// If a job was accepted by all configured rules then Load is called within the same cycle.
-	Check(*WorkState) (askAgain time.Duration, ok bool)
+	Check(*WorkState) (timeout time.Duration, ok bool)
 	// Load is called once all configured Rules confirm they are happy to execute a Job.
 	// This is used for internal state tracking of the rule.
 	// For example you may have a Rule that monitors the total space consumed by a job,

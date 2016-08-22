@@ -301,7 +301,7 @@ func Test_Pool_State(t *testing.T) {
 	close(ok)
 
 	if len(s) != 1 {
-		t.Fatalf("expected 1 job, got %s", len(s))
+		t.Fatalf("expected 1 job, got %d", len(s))
 	}
 	if s[0].State != Executing {
 		t.Fatalf("expected Executing, got %s", s[0].State)

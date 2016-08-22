@@ -87,7 +87,15 @@ func (p *Pool) Queue(job Job) error {
 	if job == nil {
 		panic("send of nil job")
 	}
-	return p.ack(newTicket(tReqJobQueueCallback, job))
+	return p.ack(newTicket(tReqJobQueue, job))
+}
+
+// QueueBatch queues one or more jobs at the same time.
+func (p *Pool) QueueBatch(jobs []Job) error {
+	if len(jobs) > 0 {
+		return p.ack(newTicket(tReqBatchJobQueue, jobs))
+	}
+	return nil
 }
 
 // Start begins queueing a Job and waits for it to start executing before returning.

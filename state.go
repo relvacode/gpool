@@ -22,7 +22,7 @@ type PoolState struct {
 }
 
 // WorkState is a representation of a Job state in the Pool.
-type WorkState struct {
+type JobState struct {
 	j Job
 	t ticket
 
@@ -40,6 +40,6 @@ type WorkState struct {
 }
 
 // Job returns the actual Job attached to this State.
-func (s *WorkState) Job() Job {
+func (s *JobState) Job() Job {
 	return s.j
 }

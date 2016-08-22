@@ -3,6 +3,7 @@ package gpool
 
 import (
 	"errors"
+	"time"
 )
 
 // ErrClosedPool indicates that a send was attempted on a pool which has already been closed.
@@ -13,6 +14,9 @@ var ErrKilled = errors.New("pool killed by signal")
 
 // ErrWorkerCount indicates that a request to modify worker size is invalid.
 var ErrWorkerCount = errors.New("invalid worker count request")
+
+// ErrTimeout indicates that a timeout request had timed out.
+var ErrTimeout = errors.New("request timed out")
 
 // Pool is the main pool struct containing a bus and workers.
 // Pool should always be invoked via NewPool().
@@ -75,11 +79,23 @@ func (p *Pool) Destroy() error {
 }
 
 // Wait will block until all of the workers in the pool have exited.
-// As such it is important that the caller either implements a timeout around Wait,
+// As such it is important that the caller either uses WaitTimeout()
 // or ensures a call to Pool.Close will be made.
 // If all workers have already exited Wait() is resolved instantly.
 func (p *Pool) Wait() error {
 	return p.ack(newTicket(tReqWait, nil))
+}
+
+// WaitTimeout waits for the pool workers to exit unless the specified timeout is exceeded in which case ErrTimeout is returned.
+func (p *Pool) WaitTimeout(timeout time.Duration) error {
+	t := newTicket(tReqWait, nil)
+	p.tIN <- t
+	select {
+	case <-time.After(timeout):
+		return ErrTimeout
+	case err := <-t.r:
+		return err
+	}
 }
 
 // Queue puts the given Job on the Pool queue and returns nil if the Job was successfully queued.
@@ -160,6 +176,9 @@ func (p *Pool) Resize(Req int) error {
 // Unlike Shrink(), additional workers are started instantly.
 // If the pool is closed ErrClosedPool is return.
 func (p *Pool) Grow(Req int) error {
+	if Req == 0 {
+		return nil
+	}
 	if Req < 1 {
 		return ErrWorkerCount
 	}
@@ -170,6 +189,9 @@ func (p *Pool) Grow(Req int) error {
 // The number of running workers will not shrink until a worker has completed a task.
 // If the requested shrink amount causes the amount of target workers to be less than 1 then ErrWorkerCount is returned.
 func (p *Pool) Shrink(Req int) error {
+	if Req == 0 {
+		return nil
+	}
 	if Req < 1 {
 		return ErrWorkerCount
 	}

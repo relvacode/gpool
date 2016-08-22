@@ -169,13 +169,13 @@ func TestPool_Hook(t *testing.T) {
 	defer p.Destroy()
 
 	var queued, started, stopped bool
-	p.Hook.Queue = func(*WorkState) {
+	p.Hook.Queue = func(*JobState) {
 		queued = true
 	}
-	p.Hook.Start = func(*WorkState) {
+	p.Hook.Start = func(*JobState) {
 		started = true
 	}
-	p.Hook.Stop = func(*WorkState) {
+	p.Hook.Stop = func(*JobState) {
 		stopped = true
 	}
 

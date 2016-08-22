@@ -1,46 +1,43 @@
 package gpool
 
-// workRequest is used to signal to the pool that a worker is ready to receive another job
-type workRequest struct {
+// workRequestPacket is used to signal to the pool that a worker is ready to receive another job
+type workRequestPacket struct {
 	Worker   int
-	Response chan *WorkState
+	Response chan *JobState
 }
 
-func newWorker(ID int, in chan *workRequest, out chan *WorkState, done chan int) *worker {
+func newWorker(ID int, in chan *workRequestPacket, out chan *JobState, done chan int) *worker {
 	return &worker{
-		i:    ID,
-		c:    make(chan bool),
-		done: done,
-		rIN:  in,
-		out:  out,
-		req: &workRequest{
+		i:          ID,
+		killSignal: make(chan bool),
+		dieSignal:  make(chan bool),
+		done:       done,
+		rIN:        in,
+		out:        out,
+		req: &workRequestPacket{
 			Worker:   ID,
-			Response: make(chan *WorkState),
+			Response: make(chan *JobState),
 		},
 	}
 }
 
 type worker struct {
-	i    int
-	c    chan bool
-	rIN  chan *workRequest
-	out  chan *WorkState
-	done chan int
+	i          int
+	killSignal chan bool
+	dieSignal  chan bool
+	rIN        chan *workRequestPacket
+	out        chan *JobState
+	done       chan int
 
-	req *workRequest
+	req *workRequestPacket
 }
 
-func (wk *worker) Close() {
-	close(wk.c)
+func (wk *worker) Die() {
+	close(wk.dieSignal)
 }
 
-func (wk *worker) active() bool {
-	select {
-	case _, ok := <-wk.c:
-		return !ok
-	default:
-		return false
-	}
+func (wk *worker) Kill() {
+	close(wk.killSignal)
 }
 
 // Work starts listening on the worker input channel and executes jobs until the input channel is closed
@@ -52,18 +49,16 @@ func (wk *worker) Work() {
 	}()
 cycle:
 	for {
-		if wk.active() {
-			return
-		}
 		select {
+		case <-wk.dieSignal:
+			return
+		case <-wk.killSignal:
+			return
 		// Work request successfully sent
 		case wk.rIN <- wk.req:
 			// Pull the return message
-			s, ok := <-wk.req.Response
+			s := <-wk.req.Response
 			// If state is nil then we didn't get a valid state
-			if !ok {
-				return
-			}
 			if s == nil {
 				continue cycle
 			}
@@ -76,7 +71,7 @@ cycle:
 			}
 
 			// Route worker cancellation into the work context
-			ctxD := route(wk.c, cancel)
+			ctxD := route(wk.killSignal, cancel)
 
 			// Execute Job
 			s.Error = s.Job().Run(ctx)
@@ -86,8 +81,6 @@ cycle:
 
 			// Send Job result to return queue
 			wk.out <- s
-		case <-wk.c:
-			return
 		}
 	}
 }

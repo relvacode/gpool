@@ -7,20 +7,6 @@ import (
 	"time"
 )
 
-func block(p *Pool) chan bool {
-	r := make(chan bool)
-	p.Start(
-		NewJob(
-			Header("blocking"),
-			func(*WorkContext) error {
-				<-r
-				return nil
-			},
-			nil,
-		))
-	return r
-}
-
 type orderedJobHeader struct {
 	i int
 }
@@ -54,23 +40,25 @@ func testPoolSchedulingOrder(n int, scheduler Scheduler) []int {
 	p := NewPool(1, false, scheduler)
 
 	IDs := []int{}
-	p.Hook.Stop = func(js *WorkState) {
+	p.Hook.Stop = func(js *JobState) {
 		if h, ok := js.Job().Header().(orderedJobHeader); ok {
 			IDs = append(IDs, h.i)
 		}
 
 	}
 
-	defer p.Destroy()
-	pause := block(p)
-
-	for i := range make([]int, n) {
-		p.Queue(newOrderedJob(i + 1))
+	jobs := []Job{}
+	for i := 0; i < n; i++ {
+		jobs = append(jobs, newOrderedJob(i+1))
 	}
 
-	close(pause)
+	if err := p.QueueBatch(jobs); err != nil {
+		return IDs
+	}
+
 	p.Close()
 	p.Wait()
+	p.Destroy()
 	return IDs
 }
 
@@ -85,6 +73,7 @@ func TestFIFOScheduler_Evaluate(t *testing.T) {
 	if order[0] != 1 {
 		t.Fatal("expected first id to be 1, got ", order[0])
 	}
+	// go test -c && ./gpool.test -test.cpuprofile=cpu.prof -test.memprofile=mem.prof -test.bench=BenchmarkPool_Execute && go tool pprof -pdf gpool.test cpu.prof > profile.pdf
 }
 
 func TestLIFOScheduler_Evaluate(t *testing.T) {

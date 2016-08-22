@@ -7,7 +7,8 @@ const (
 	_ tReq = iota
 	tReqJobStartCallback
 	tReqJobStopCallback
-	tReqJobQueueCallback
+	tReqJobQueue
+	tReqBatchJobQueue
 	tReqClose
 	tReqKill
 	tReqWait

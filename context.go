@@ -9,18 +9,3 @@ type WorkContext struct {
 	// Cancel is a buffered channel that is closed if a cancellation is requested by the Pool.
 	Cancel <-chan bool
 }
-
-// route listens for a message on src then closes dst
-// close the returned channel to stop listening.
-func route(src, dst chan bool) chan<- bool {
-	d := make(chan bool, 1)
-	go func() {
-		select {
-		case <-d:
-			return
-		case <-src:
-			close(dst)
-		}
-	}()
-	return d
-}

@@ -1,6 +1,7 @@
 package gpool
 
-// ticket request types
+import "fmt"
+
 type tReq int
 
 const (
@@ -41,4 +42,126 @@ func newTicket(r tReq, data interface{}) ticket {
 		data: data,
 		r:    make(chan error, 1),
 	}
+}
+
+func (p *pool) processTicketRequest(t ticket) {
+	switch t.t {
+	// New Job request
+	case tReqJobStartCallback, tReqJobStopCallback, tReqJobQueue:
+		if p.state > OK {
+			t.r <- ErrClosedPool
+			return
+		}
+		u := uuid()
+		if u == "" {
+			t.r <- fmt.Errorf("unable to generate uuid")
+			return
+		}
+
+		p.putQueueState(&JobState{ID: u, j: t.data.(Job), t: t})
+		if t.t == tReqJobQueue {
+			t.r <- nil
+		}
+	case tReqBatchJobQueue:
+		if p.state > OK {
+			t.r <- ErrClosedPool
+			return
+		}
+		jobs := t.data.([]Job)
+		for _, j := range jobs {
+			u := uuid()
+			if u == "" {
+				t.r <- fmt.Errorf("unable to generate uuid")
+				return
+			}
+			p.putQueueState(&JobState{ID: u, j: j, t: t})
+		}
+		t.r <- nil
+	// Pool close request
+	case tReqClose:
+		if p.state >= Closed {
+			t.r <- ErrClosedPool
+			return
+		}
+		if p.state == OK && p.intent < wantStop {
+			p.intent = wantStop
+		}
+		t.r <- nil
+		return
+	// Pool kill request
+	case tReqKill:
+		if p.state > Closed {
+			t.r <- ErrKilled
+			return
+		}
+		if p.intent < wantKill {
+			p.intent = wantKill
+		}
+		t.r <- nil
+		return
+	// Pool wait request
+	case tReqWait:
+		// If done resolve ticket instantly
+		if p.state == Done {
+			acknowledge(p.err, t)
+			return
+		}
+		p.pendWait = append(p.pendWait, t)
+	case tReqGrow, tReqShrink:
+		i := t.data.(int)
+		if t.t == tReqShrink {
+			i = -i
+		}
+		if p.state != OK {
+			t.r <- ErrClosedPool
+			return
+		}
+		target := adjust(len(p.workers), i)
+		if target > 0 {
+			p.resolveWorkers(target)
+			t.r <- nil
+		}
+		t.r <- ErrWorkerCount
+	case tReqResize:
+		i := t.data.(int)
+		if p.state != OK {
+			t.r <- ErrClosedPool
+			return
+		}
+		if i == 0 {
+			t.r <- ErrWorkerCount
+			return
+		}
+		p.resolveWorkers(i)
+		t.r <- nil
+	case tReqGetError:
+		t.r <- p.err
+	case tReqDestroy:
+		if p.state == OK && p.intent == OK {
+			p.intent = wantStop
+		}
+		p.pendDestroy = append(p.pendDestroy, t)
+	case tReqStat:
+		t.r <- &returnPayload{data: p.stat()}
+	default:
+		panic(fmt.Sprintf("unexpected ticket type %d", t.t))
+	}
+}
+
+// resolves resolves all remaining tickets by sending them the ctx error.
+// any unresolved tickets are returned, currently unused.
+func acknowledge(ctx error, tickets ...ticket) []ticket {
+	if len(tickets) != 0 {
+		// Pop every item in tickets and send return signal to ticket
+		for {
+			if len(tickets) == 0 {
+				// No more pending message, continue with next cycle
+				break
+			}
+			var t ticket
+			t, tickets = tickets[len(tickets)-1], tickets[:len(tickets)-1]
+			t.r <- ctx
+		}
+	}
+	return []ticket{}
 }

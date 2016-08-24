@@ -6,13 +6,13 @@ import (
 )
 
 const (
-	// The Job is currently waiting in the queue
+	// Queued means the Job is in the Pool queue.
 	Queued string = "Queued"
-	// The Job is currently executing
+	// Executing means the Job is executing on a worker.
 	Executing string = "Executing"
-	// The Job failed because the Run() function returned an error
+	// Failed means the Job failed because the Run() function returned a non-nil error.
 	Failed string = "Failed"
-	// The Job finished execution without error.
+	// Finished means the Job completed because the Run() function returned a nil error.
 	Finished string = "Finished"
 )
 
@@ -23,15 +23,14 @@ const (
 )
 
 const (
-	// Pool has no state, or is running
+	// OK means Pool has no state, or is running.
 	OK int = iota
-	// Pool is closed, no more Job requests may be made
-	// but currently executing and queued Jobs are still managed
+	// Closed means Pool is closed, no more Job requests may be made
+	// but currently executing and queued Jobs will continue to be executed.
 	Closed
-	// Pool has been killed via error propagation or Kill() call
+	// Killed means the Pool has been killed via error propagation or Kill() call.
 	Killed
-	// Pool is done
-	// the queue is empty and all workers have exited.
+	// Done means the queue is empty and all workers have exited.
 	Done
 )
 

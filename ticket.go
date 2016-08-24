@@ -2,7 +2,6 @@ package gpool
 
 import "fmt"
 
-// ticket request types
 type tReq int
 
 const (

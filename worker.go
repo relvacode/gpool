@@ -6,38 +6,30 @@ type workRequestPacket struct {
 	Response chan *JobState
 }
 
+type signal int
+
+const (
+	sigterm = signal(1)
+	sigkill = signal(2)
+)
+
 func newWorker(ID int, in chan *workRequestPacket, out chan *JobState, done chan int) *worker {
 	return &worker{
-		i:          ID,
-		killSignal: make(chan bool),
-		dieSignal:  make(chan bool),
-		done:       done,
-		rIN:        in,
-		out:        out,
-		req: &workRequestPacket{
-			Worker:   ID,
-			Response: make(chan *JobState),
-		},
+		ID:     ID,
+		Signal: make(chan signal, 2),
+		done:   done,
+		rIN:    in,
+		out:    out,
 	}
 }
 
 type worker struct {
-	i          int
-	killSignal chan bool
-	dieSignal  chan bool
-	rIN        chan *workRequestPacket
-	out        chan *JobState
-	done       chan int
+	ID     int
+	Signal chan signal
 
-	req *workRequestPacket
-}
-
-func (wk *worker) Die() {
-	close(wk.dieSignal)
-}
-
-func (wk *worker) Kill() {
-	close(wk.killSignal)
+	rIN  chan *workRequestPacket
+	out  chan *JobState
+	done chan int
 }
 
 // Work starts listening on the worker input channel and executes jobs until the input channel is closed
@@ -45,19 +37,23 @@ func (wk *worker) Kill() {
 func (wk *worker) Work() {
 	// Signal this worker is done on exit
 	defer func() {
-		wk.done <- wk.i
+		wk.done <- wk.ID
 	}()
+
+	req := &workRequestPacket{
+		Worker:   wk.ID,
+		Response: make(chan *JobState),
+	}
+
 cycle:
 	for {
 		select {
-		case <-wk.dieSignal:
-			return
-		case <-wk.killSignal:
-			return
+		case <-wk.Signal:
+			break cycle
 		// Work request successfully sent
-		case wk.rIN <- wk.req:
+		case wk.rIN <- req:
 			// Pull the return message
-			s := <-wk.req.Response
+			s := <-req.Response
 			// If state is nil then we didn't get a valid state
 			if s == nil {
 				continue cycle
@@ -65,22 +61,28 @@ cycle:
 
 			// Create a work context for this job using the Job request ID
 			cancel := make(chan bool, 1)
+			result := make(chan error, 1)
 			ctx := &WorkContext{
 				WorkID: s.ID,
 				Cancel: cancel,
 			}
 
-			// Route worker cancellation into the work context
-			ctxD := route(wk.killSignal, cancel)
+			// Begin executing the job
+			go func() {
+				result <- s.Job().Run(ctx)
+			}()
 
-			// Execute Job
-			s.Error = s.Job().Run(ctx)
-
-			// Close cancel wrapping
-			close(ctxD)
-
-			// Send Job result to return queue
-			wk.out <- s
+			select {
+			case sig := <-wk.Signal:
+				if sig == sigkill {
+					close(cancel)
+				}
+				s.Error = <-result
+				wk.out <- s
+				break cycle
+			case s.Error = <-result:
+				wk.out <- s
+			}
 		}
 	}
 }

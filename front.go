@@ -33,11 +33,9 @@ func NewPool(Workers int, Propagate bool, Scheduler Scheduler) *Pool {
 	if Workers == 0 {
 		panic("need at least one worker")
 	}
-	p := &Pool{
+	return &Pool{
 		newPool(Workers, Propagate, Scheduler),
 	}
-	p.pool.start()
-	return p
 }
 
 // ack attempts to send the ticket to the ticket queue.
@@ -62,7 +60,7 @@ func (p *Pool) Kill() error {
 }
 
 // Close sends a graceful close request to the pool bus.
-// Workers will finish after the last submitted job is complete.
+// Workers will finish after the last submitted job is complete and the Job queue is empty.
 // Close does not return an error if the pool is already closed.
 // No additional jobs may be sent to the pool after Close().
 func (p *Pool) Close() error {
@@ -71,9 +69,8 @@ func (p *Pool) Close() error {
 
 // Destroy sends a bus destroy request to the pool.
 // Once all workers have exited, if a Destroy() request is active then the bus will exit.
-// This means there will be no listener for pool requests,
-// you must ensure that after the pool closes via Close(), Kill() or internal error and a Destroy() request is active
-// no additional requests are sent otherwise the bus will block forever.
+// Meaning there will be no listener for further ticket requests causing a deadlock.
+// When calling Destroy() the Pool is marked as wanting close after the Job queue has been emptied.
 func (p *Pool) Destroy() error {
 	return p.ack(newTicket(tReqDestroy, nil))
 }

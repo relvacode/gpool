@@ -148,63 +148,6 @@ func (p *pool) putStopState(js *JobState) {
 	}
 }
 
-func adjust(length int, adj int) int {
-	switch true {
-	case adj < 0:
-		return length - adj
-	case adj > 0:
-		return length + adj
-	default:
-		return length
-	}
-}
-
-func (p *pool) resolveWorkers(target int) {
-	length := len(p.workers)
-	if target == len(p.workers) {
-		return
-		// if we have too many workers then kill some off
-	} else if target < length {
-		var delta, i int = length - target, 0
-		for id, w := range p.workers {
-			w.Signal <- sigterm
-			delete(p.workers, id)
-			i++
-			if i == delta {
-				return
-			}
-		}
-		// otherwise start some up
-	} else {
-		for i := 0; i < target-length; i++ {
-			// create a worker
-			p.wkID++
-			id := p.wkID
-			w := newWorker(id, p.wIN, p.wOUT, p.wEXIT)
-			go w.Work()
-			p.workers[id] = w
-		}
-	}
-}
-
-// resolves resolves all remaining tickets by sending them the ctx error.
-// any unresolved tickets are returned, currently unused.
-func (p *pool) acknowledge(ctx error, tickets ...ticket) []ticket {
-	if len(tickets) != 0 {
-		// Pop every item in tickets and send return signal to ticket
-		for {
-			if len(tickets) == 0 {
-				// No more pending message, continue with next cycle
-				break
-			}
-			var t ticket
-			t, tickets = tickets[len(tickets)-1], tickets[:len(tickets)-1]
-			t.r <- ctx
-		}
-	}
-	return []ticket{}
-}
-
 func (p *pool) stat() *PoolState {
 	var err *string
 	if p.err != nil {
@@ -226,10 +169,9 @@ func (p *pool) stat() *PoolState {
 // clearQ iterates through the pending send queue and clears all requests by acknowledging them with the given error.
 func (p *pool) abortQueue(err error) {
 	for _, jr := range p.jQ {
-		// Abort job is method is present
 		jr.Job().Abort()
 	}
-	p.jQ = []*JobState{}
+	p.jQ = p.jQ[:0]
 }
 
 func (p *pool) schedule() (j *JobState, next time.Duration) {
@@ -319,11 +261,11 @@ cycle:
 				p.abortQueue(p.err)
 			}
 			// Resolve pending waits
-			p.pendWait = p.acknowledge(p.err, p.pendWait...)
+			p.pendWait = acknowledge(p.err, p.pendWait...)
 
 			// If pending destroys then resolve and exit bus.
 			if len(p.pendDestroy) > 0 {
-				p.pendDestroy = p.acknowledge(p.err, p.pendDestroy...)
+				p.pendDestroy = acknowledge(p.err, p.pendDestroy...)
 				break cycle
 			}
 		}

@@ -9,6 +9,7 @@ func test_uuid_uniqueness(N int, get func() string, t *testing.T) {
 		if _, ok := track[uid]; ok {
 			t.Fatal("uuid collision: ", uid)
 		}
+		track[uid] = true
 	}
 }
 

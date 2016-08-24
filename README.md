@@ -1,137 +1,67 @@
 # gPool - Pool Based Job Execution
 
 [![Build Status](https://travis-ci.org/relvacode/gpool.svg?branch=master)](https://travis-ci.org/relvacode/gpool) [![GoDoc](https://godoc.org/github.com/relvacode/gpool?status.svg)](https://godoc.org/github.com/relvacode/gpool)
+[![Go Report Card](https://goreportcard.com/badge/github.com/relvacode/gpool)](https://goreportcard.com/report/github.com/relvacode/gpool)
 
-_gPool is a thread safe queued worker pool implementation_
+_gPool is an execution engine for a pool of workers_
 
 `import "github.com/relvacode/gpool"`
 
-## Basic Usage
+# Features
+
+  * Optional error propagation
+  * Dynamic resizing
+  * Queuing, with custom schedulers
+  * Lock-free
+  * Hooks
+  * Cancellable execution
+
+# Usage
+
+Create a new pool with 5 workers, error propagation enabled and using the default `FIFOScheduler` scheduler.
 
 ```go
-	// Create a Pool with 5 workers.
-	// Workers are started on creation
-	p := gpool.NewPool(5)
-	
-	// Cleanup when we are done.
-	defer p.Destroy()
-
-	// Example JobFn.
-	// After 10 seconds the job will return 'Hello, World!'
-	JobFn := func(c chan bool) (interface{}, error) {
-		<-time.After(10 * time.Second)
-		return "Hello, World!", nil
-	}
-	
-	// Create a Job with an Identifier
-	Job := gpool.NewJob(
-		Identifier("MyPoolJob"), JobFn,
-	)
-	
-	// Send it to the Pool
-	p.Send(Job)
-
-	// Close the pool after all messages are sent
-	p.Close()
-
-	// Wait for the pool to finish. This will block forever if the pool is not closed.
-	e := p.Wait()
-	// e is any error that occured within the Pool
-	
-	// Get all jobs that have finished executing
-	jobs := p.Jobs(gpool.Finished)
+p := NewPool(5, true, nil)
 ```
 
-## Job
-A `Job` is a task to execute on the `Pool` that satisfies `gpool.Job`. `gpool.NewJob()` creates a interface{} that contains an `Identifier` and a execution function `JobFn` which can then be submitted to the pool.
+Create your `Job` interface
 
 ```go
-// Create an Identifer, this in an interface{} which has a String() string method. 
-// You can use the built in pool.Identifier() for simple strings
-i := gpool.Identifier("MyTestJob")
+type Job interface {
+	// An identity header that implements String()
+	Header() fmt.Stringer
 
-// Create the Job execution function.
-// The job can optionally return an output interface{} and any errors as a result of execution.
-// The c chan will be closed when the Pool is killed, or another job returns a non-nil error.
-fn := func(c chan bool) (interface{}, error) {
-  return "Hello, World!", nil
-}
+	// Run the Job.
+	// If propagation is enabled on the Pool then the error returned it is propagated up and the Pool is killed.
+	Run(*WorkContext) error
 
-// Finally, create a Job that can be submitted to the pool.
-Job := gpool.NewJob(i, fn)
-```
-
-### Cancel
-The execution `JobFn` function supplied in `NewJob()` is given a channel which will be closed when a call to `Pool.Kill()` is made or another `Job` in the `Pool` returns an error. This is called via `Job.Cancel()`.
-A call to `Pool.Wait()` will not continue until all currently active Jobs in the Pool have completed, so it's important for especially long-running jobs to be able to receive and action this signal in reasonable time.
-
-```go
-fn := func(c chan bool) (interface{}, error) {
-  select {
-  case <-c:
-    // Cancel signal received, exit without doing anything
-    return nil, nil
-  case <-time.After(10*time.Second):
-    // After a 10 second timeout if no cancel signal is received then return "Hello, World!"
-    return "Hello, World!", nil
-  }
+	// Abort is used for when a Job is in the queue and needs to be removed (via call to Pool.Kill() for example).
+	// Abort is never called if the Job is already in a starting state, if it is then the Cancel channel of the
+	// WorkContext is used instead.
+	// Abort is called before the requesting ticket (Pool.Execute, Pool.Submit) is signalled.
+	Abort()
 }
 ```
 
-### Identifier
-An Identifier is a `interface{}` that has a `String() string` method. This is used to give jobs a name but can also contain more advanced information via type assertion.
+There are a few ways to submit a `Job` to the `Pool`
 
 ```go
-// Create you custom Identifer struct{}
-type CopyIdentifier struct {
-  Name string
-  Source, Dest string
-}
+j := new(MyJob)
 
-// Implement String() string
-func (c *CopyIdentifier) String() string {
-  return c.Name
-}
+// Begin queueing the Job
+p.Queue(j)
 
-// Example Job
-fn := func(c chan bool) (interface{}, error) {
-  return "Hello, World!", nil
-}
+// Wait for the Job to start executing
+p.Start(j)
 
-// Initialise your custom Identifier with some data
-i := CopyIdentifier{
-  Name:   "Copy file.txt",
-  Source: "/src/file.txt",
-  Dest:   "/dst/file.txt",
-}
-Job := gpool.NewJob(i, fn)
-
-p := gpool.NewPool(5)
-
-// Set a Pool Hook
-p.Hook.Start = func(j gpool.JobState) {
-  // Check if the Idenitifer is a CopyIdentifier. If so then print the source and destination.
-  if i, ok :=  j.Identifier.(*CopyIdentifier); ok {
-    log.Println("Copy", i.Source, "to", i.Dest) // Outputs: Copy /src/file.txt to /dst/file.txt
-  }
-}
-
+// Wait for the Job to finish and return the error
+p.Execute(j)
 ```
 
-## Bus
-
-The bus is the central communication loop which mediates pool input requests in a thread safe way.
-All pool requests are sent to the bus and then resolved instantly with the exception of `Pool.Wait()`, `Pool.Send()` and `Pool.Destroy` which are queued internally until they can be resolved.
-
-
-## Hooks
-A `Hook` `func(gpool.JobState)` is a function that is executed when a Pool worker starts or stops executing a `Job`. 
-Hooks are entirely optional and should not contain any real computation, primarily they should be used for logging.
-They are executed by the worker and thus are called concurrently so it's important you don't introduce any race conditions because of shared access.
+Finally, when done make sure you call `Pool.Close()` to close the pool.
+You can use `Pool.Wait()` to wait for all jobs to finish.
 
 ```go
-p := gpool.NewPool(1)
-p.Hook.Start = function(j gpool.JobState) {
-  log.Println("Started", j.Identifier)
-}
+p.Close()
+p.Wait()
 ```

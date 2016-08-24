@@ -21,7 +21,7 @@ type PoolState struct {
 	State int
 }
 
-// WorkState is a representation of a Job state in the Pool.
+// JobState is a representation of a Job state in the Pool.
 type JobState struct {
 	j Job
 	t ticket

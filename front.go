@@ -112,6 +112,7 @@ func (p *Pool) QueueBatch(jobs []Job) error {
 }
 
 // Start begins queueing a Job and waits for it to start executing before returning.
+// nil is returned if the Job successfully started to execute.
 func (p *Pool) Start(job Job) error {
 	if job == nil {
 		panic("send of nil job")
@@ -119,6 +120,7 @@ func (p *Pool) Start(job Job) error {
 	return p.ack(newTicket(tReqJobStartCallback, job))
 }
 
+// StartAsync performs the same function as Start but returns an asynchronous channel for the result of starting the Job.
 func (p *Pool) StartAsync(job Job) chan error {
 	if job == nil {
 		panic("send of nil job")

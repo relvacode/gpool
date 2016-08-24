@@ -104,7 +104,7 @@ func (p *pool) processTicketRequest(t ticket) {
 	case tReqWait:
 		// If done resolve ticket instantly
 		if p.state == Done {
-			p.acknowledge(p.err, t)
+			acknowledge(p.err, t)
 			return
 		}
 		p.pendWait = append(p.pendWait, t)
@@ -147,4 +147,22 @@ func (p *pool) processTicketRequest(t ticket) {
 	default:
 		panic(fmt.Sprintf("unexpected ticket type %d", t.t))
 	}
+}
+
+// resolves resolves all remaining tickets by sending them the ctx error.
+// any unresolved tickets are returned, currently unused.
+func acknowledge(ctx error, tickets ...ticket) []ticket {
+	if len(tickets) != 0 {
+		// Pop every item in tickets and send return signal to ticket
+		for {
+			if len(tickets) == 0 {
+				// No more pending message, continue with next cycle
+				break
+			}
+			var t ticket
+			t, tickets = tickets[len(tickets)-1], tickets[:len(tickets)-1]
+			t.r <- ctx
+		}
+	}
+	return []ticket{}
 }

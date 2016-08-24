@@ -1,95 +1,86 @@
 package gpool
 
-func newWorker(ID int, in chan *jobRequest, out chan *jobResult, done chan int) *worker {
+// workRequestPacket is used to signal to the pool that a worker is ready to receive another job
+type workRequestPacket struct {
+	Worker   int
+	Response chan *JobState
+}
+
+func newWorker(ID int, in chan *workRequestPacket, out chan *JobState, done chan int) *worker {
 	return &worker{
-		i:    ID,
-		c:    make(chan bool),
-		done: done,
-		in:   in,
-		out:  out,
+		i:          ID,
+		killSignal: make(chan bool),
+		dieSignal:  make(chan bool),
+		done:       done,
+		rIN:        in,
+		out:        out,
+		req: &workRequestPacket{
+			Worker:   ID,
+			Response: make(chan *JobState),
+		},
 	}
 }
 
 type worker struct {
-	i    int
-	c    chan bool
-	in   chan *jobRequest
-	out  chan *jobResult
-	done chan int
+	i          int
+	killSignal chan bool
+	dieSignal  chan bool
+	rIN        chan *workRequestPacket
+	out        chan *JobState
+	done       chan int
+
+	req *workRequestPacket
 }
 
-func (ctx *worker) Close() {
-	close(ctx.c)
+func (wk *worker) Die() {
+	close(wk.dieSignal)
 }
 
-func (ctx *worker) active() bool {
-	select {
-	case _, ok := <-ctx.c:
-		return !ok
-	default:
-		return false
-	}
+func (wk *worker) Kill() {
+	close(wk.killSignal)
 }
 
-// worker is the Pool worker routine that receives jobRequests from the pool worker queue until the queue is closed.
-// It executes the job and returns the result to the worker return channel as a JobResult.
-func (ctx *worker) Work() {
+// Work starts listening on the worker input channel and executes jobs until the input channel is closed
+// or a cancellation signal is received.
+func (wk *worker) Work() {
 	// Signal this worker is done on exit
 	defer func() {
-		ctx.done <- ctx.i
+		wk.done <- wk.i
 	}()
+cycle:
 	for {
-		if ctx.active() {
-			return
-		}
 		select {
-		case req, ok := <-ctx.in:
-			// Worker queue has been closed
-			if !ok {
-				return
-			}
-			// Acknowledge ticket
-			if req.Ack != nil {
-				req.Ack <- nil
+		case <-wk.dieSignal:
+			return
+		case <-wk.killSignal:
+			return
+		// Work request successfully sent
+		case wk.rIN <- wk.req:
+			// Pull the return message
+			s := <-wk.req.Response
+			// If state is nil then we didn't get a valid state
+			if s == nil {
+				continue cycle
 			}
 
-			// Cancel wrapper
-			d := make(chan struct{})
-			var cancelled bool
-			go func() {
-				select {
-				// Job done
-				case <-d:
-					return
-				// Worker cancel signal received
-				case <-ctx.c:
-					cancelled = true
-					req.Job.Cancel()
-				}
-			}()
+			// Create a work context for this job using the Job request ID
+			cancel := make(chan bool, 1)
+			ctx := &WorkContext{
+				WorkID: s.ID,
+				Cancel: cancel,
+			}
+
+			// Route worker cancellation into the work context
+			ctxD := route(wk.killSignal, cancel)
 
 			// Execute Job
-			o, e := req.Job.Run()
+			s.Error = s.Job().Run(ctx)
 
 			// Close cancel wrapping
-			close(d)
-
-			if e != nil {
-				e = newPoolError(req, e)
-			} else if cancelled {
-				e = ErrCancelled
-			}
-			j := &jobResult{
-				Job:    req.Job,
-				ID:     req.ID,
-				Error:  e,
-				Output: o,
-			}
+			close(ctxD)
 
 			// Send Job result to return queue
-			ctx.out <- j
-		case <-ctx.c:
-			return
+			wk.out <- s
 		}
 	}
 }

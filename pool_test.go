@@ -30,35 +30,20 @@ func (j *testingJob) Run(ctx *WorkContext) error {
 	return j.err
 }
 
-func TestPool_Kill(t *testing.T) {
+func TestPool_Destroy(t *testing.T) {
 	p := NewPool(1, true, nil)
-	defer p.Destroy()
+	p.Destroy()
 
-	block := make(chan bool)
-	j0 := &testingJob{
-		name: "blocking",
-		wait: block,
-	}
-	if err := p.Start(j0); err != nil {
-		t.Fatal(err)
-	}
+	res := make(chan interface{})
+	go func() {
+		res <- p.State()
+	}()
 
-	j1 := &testingJob{
-		name: "waiting job",
-	}
-	if err := p.Queue(j1); err != nil {
-		t.Fatal(err)
-	}
-	p.Close()
-
-	if err := p.Kill(); err != nil {
-		t.Fatal(err)
-	}
-	close(block)
-	p.Wait()
-
-	if !j1.aborted {
-		t.Fatal("job not aborted")
+	select {
+	case <-res:
+		t.Fatal("bus isn't dead")
+	case <-time.After(time.Microsecond):
+		return
 	}
 }
 
@@ -151,7 +136,7 @@ func TestPool_State(t *testing.T) {
 	close(ok)
 }
 
-func Test_Pool_Wait(t *testing.T) {
+func TestPool_Wait(t *testing.T) {
 	p := NewPool(1, true, nil)
 	ok := make(chan bool)
 	go func() {
@@ -213,7 +198,7 @@ func TestPool_Load(t *testing.T) {
 	}
 }
 
-func Test_Pool_Send_Concurrent(t *testing.T) {
+func TestPool_Send_Concurrent(t *testing.T) {
 	p := NewPool(1, true, nil)
 	defer p.Destroy()
 	wg := &sync.WaitGroup{}
@@ -242,7 +227,7 @@ func Test_Pool_Send_Concurrent(t *testing.T) {
 	}
 }
 
-func Test_Pool_Kill(t *testing.T) {
+func TestPool_Kill(t *testing.T) {
 	p := NewPool(1, true, nil)
 	defer p.Destroy()
 	cancelled := make(chan bool)
@@ -265,6 +250,20 @@ func Test_Pool_Kill(t *testing.T) {
 	e = p.Wait()
 	if e != ErrKilled {
 		t.Fatal("expected ErrKilled, got", e)
+	}
+}
+
+func TestPool_Resize(t *testing.T) {
+	p := NewPool(1, true, nil)
+	defer p.Destroy()
+	p.Resize(10)
+	p.Resize(1)
+	p.Resize(10)
+	p.Resize(1)
+	p.Resize(10)
+	s := p.State()
+	if s.Workers != 10 {
+		t.Fatal("expected 10 workers, got ", s.Workers)
 	}
 }
 

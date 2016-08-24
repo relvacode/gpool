@@ -23,21 +23,23 @@ type Scheduler interface {
 // FIFOScheduler is a scheduler that executes Jobs on a first in, first out order.
 type FIFOScheduler struct{}
 
-// Always return the first Job
+// Evaluate always returns the first index and a 0 timeout duration.
 func (FIFOScheduler) Evaluate(s []*JobState) (int, time.Duration, bool) {
 	return 0, AsSoonAsPossible, true
 }
 
+// Unload does nothing.
 func (FIFOScheduler) Unload(*JobState) {}
 
 // LIFOScheduler is a scheduler that executes Jobs on a last in, first out order.
 type LIFOScheduler struct{}
 
-// Always return the last Job
+// Evaluate always returns the last index and a 0 timeout duration.
 func (LIFOScheduler) Evaluate(jobs []*JobState) (int, time.Duration, bool) {
 	return len(jobs) - 1, AsSoonAsPossible, true
 }
 
+// Unload does nothing.
 func (LIFOScheduler) Unload(*JobState) {}
 
 // A ScheduleRule is an interface that implements methods for checking if a Job State should be executed.
@@ -60,12 +62,16 @@ type ScheduleRule interface {
 // All rules must pass before a Job can be scheduled.
 type RuleScheduler []ScheduleRule
 
+// Unload calls Unload on each ScheduleRule.
 func (sch RuleScheduler) Unload(j *JobState) {
 	for _, r := range sch {
 		r.Unload(j)
 	}
 }
 
+// Evaluate calls Check on each ScheduleRule for each Job in jobs.
+// If the ScheduleRule returns not ok then the timeout of that ScheduleRule is returned.
+// If successful, Load is called on each ScheduleRule and the index of that successful Job is returned.
 func (sch RuleScheduler) Evaluate(jobs []*JobState) (int, time.Duration, bool) {
 	for idx, j := range jobs {
 		for _, r := range sch {

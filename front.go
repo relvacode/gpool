@@ -18,6 +18,8 @@ var ErrWorkerCount = errors.New("invalid worker count request")
 // ErrTimeout indicates that a timeout request had timed out.
 var ErrTimeout = errors.New("request timed out")
 
+var ErrUnknownJob = errors.New("job id unknown")
+
 // Pool is the main pool struct containing a bus and workers.
 // Pool should always be invoked via NewPool().
 type Pool struct {
@@ -81,6 +83,12 @@ func (p *Pool) Destroy() error {
 // If all workers have already exited Wait() is resolved instantly.
 func (p *Pool) Wait() error {
 	return p.ack(newTicket(tReqWait, nil))
+}
+
+func (p *Pool) WaitAsync() chan error {
+	t := newTicket(tReqWait, nil)
+	p.tIN <- t
+	return t.r
 }
 
 // WaitTimeout waits for the pool workers to exit unless the specified timeout is exceeded in which case ErrTimeout is returned.
@@ -185,8 +193,8 @@ func (p *Pool) Grow(Req int) error {
 }
 
 // Shrink shrinks the amount of target workers in the pool.
-// The number of running workers will not shrink until a worker has completed a task.
 // If the requested shrink amount causes the amount of target workers to be less than 1 then ErrWorkerCount is returned.
+// The worker count does not decrease immediately, if a worker is currently active with a Job it will exit once the Job finished.
 func (p *Pool) Shrink(Req int) error {
 	if Req == 0 {
 		return nil

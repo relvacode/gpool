@@ -1,6 +1,9 @@
 package gpool
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/pkg/errors"
+)
 
 type tReq int
 
@@ -71,7 +74,7 @@ func (p *pool) processTicketRequest(t ticket) {
 		for _, j := range jobs {
 			u := uuid()
 			if u == "" {
-				t.r <- fmt.Errorf("unable to generate uuid")
+				t.r <- errors.New("unable to generate uuid")
 				return
 			}
 			p.putQueueState(&JobState{ID: u, j: j, t: t})
@@ -107,33 +110,25 @@ func (p *pool) processTicketRequest(t ticket) {
 			return
 		}
 		p.pendWait = append(p.pendWait, t)
-	case tReqGrow, tReqShrink:
-		i := t.data.(int)
-		if t.t == tReqShrink {
-			i = -i
-		}
+	case tReqGrow, tReqShrink, tReqResize:
 		if p.state != OK {
 			t.r <- ErrClosedPool
 			return
 		}
-		target := adjust(len(p.workers), i)
+
+		target := t.data.(int)
+		if t.t == tReqGrow {
+			target = adjust(p.wkCur, target)
+		}
+		if t.t == tReqShrink {
+			target = adjust(p.wkCur, -target)
+		}
 		if target > 0 {
 			p.resolveWorkers(target)
 			t.r <- nil
+			return
 		}
 		t.r <- ErrWorkerCount
-	case tReqResize:
-		i := t.data.(int)
-		if p.state != OK {
-			t.r <- ErrClosedPool
-			return
-		}
-		if i == 0 {
-			t.r <- ErrWorkerCount
-			return
-		}
-		p.resolveWorkers(i)
-		t.r <- nil
 	case tReqGetError:
 		t.r <- p.err
 	case tReqDestroy:

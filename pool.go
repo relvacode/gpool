@@ -39,13 +39,13 @@ func newPool(target int, propagate bool, scheduler Scheduler) *pool {
 		scheduler = DefaultScheduler
 	}
 	p := &pool{
-		workers:   make(map[int]*worker),
-		tIN:       make(chan ticket),
-		wIN:       make(chan *workRequestPacket),
-		wOUT:      make(chan *JobState),
-		wEXIT:     make(chan int),
-		propagate: propagate,
-		scheduler: scheduler,
+		actWorkers: make(map[int]*worker),
+		tIN:        make(chan ticket),
+		wIN:        make(chan *workRequestPacket),
+		wOUT:       make(chan *JobState),
+		wEXIT:      make(chan int),
+		propagate:  propagate,
+		scheduler:  scheduler,
 	}
 	p.resolveWorkers(target)
 	go p.bus()
@@ -55,8 +55,9 @@ func newPool(target int, propagate bool, scheduler Scheduler) *pool {
 type pool struct {
 	jQ []*JobState // Job queue
 
-	workers map[int]*worker
-	wkID    int
+	actWorkers map[int]*worker
+	wkCur      int
+	wkID       int
 
 	jcQueued    int
 	jcExecuting int
@@ -160,7 +161,7 @@ func (p *pool) stat() *PoolState {
 		Finished:  p.jcFinished,
 		Queued:    p.jcQueued,
 
-		Workers: len(p.workers),
+		Workers: p.wkCur,
 		State:   p.state,
 	}
 }
@@ -230,9 +231,9 @@ cycle:
 				p.state = Closed
 			}
 			// Kill all workers
-			for idx, w := range p.workers {
+			for idx, w := range p.actWorkers {
 				w.Signal <- sigkill
-				delete(p.workers, idx)
+				delete(p.actWorkers, idx)
 			}
 			p.abortQueue(p.err)
 
@@ -247,9 +248,9 @@ cycle:
 				break
 			}
 			// Close remaining workers
-			for idx, w := range p.workers {
+			for idx, w := range p.actWorkers {
 				w.Signal <- sigterm
-				delete(p.workers, idx)
+				delete(p.actWorkers, idx)
 			}
 			p.state = Closed
 			p.intent = OK
@@ -289,21 +290,21 @@ cycle:
 
 		selected, inf, _ := reflect.Select(cases)
 		switch selected {
-		case 0:
-			// Ticket request
+		case 0: // Ticket request
 			p.processTicketRequest(inf.Interface().(ticket))
-		case 1:
-			// Worker response, error propagation
-			p.putStopState(inf.Interface().(*JobState))
-		case 2:
-			// Worker done
-			delete(p.workers, inf.Interface().(int))
+		case 1: // Job finished
+			j := inf.Interface().(*JobState)
+			p.putStopState(j)
+		case 2: // Worker finished
+			id := inf.Interface().(int)
+			delete(p.actWorkers, id)
+			p.wkCur--
 			// If no more workers then stop listening for worker done messages
-			if len(p.workers) == 0 {
+			if p.wkCur == 0 {
 				p.state = Done
 				cases[2] = selectRecv(nil)
 			}
-		case 3:
+		case 3: // Worker Job request
 			wkr, isRequest := inf.Interface().(*workRequestPacket)
 			if !isRequest {
 				// Evaluation timer timeout
@@ -317,6 +318,7 @@ cycle:
 				nextEvaluation = time.Time{}
 			}
 
+			// Valid job received from scheduler
 			if j != nil {
 				wkr.Response <- j
 				p.putStartState(j)

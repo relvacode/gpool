@@ -25,6 +25,8 @@ type PoolState struct {
 type JobState struct {
 	j Job
 	t ticket
+	// used to cancel a currently executing job
+	c chan signal
 
 	ID string
 

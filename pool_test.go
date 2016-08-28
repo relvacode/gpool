@@ -20,7 +20,9 @@ func (j *testingJob) Header() fmt.Stringer {
 	return Header(j.name)
 }
 
-func (j *testingJob) Abort() { j.aborted = true }
+func (j *testingJob) Abort() {
+	j.aborted = true
+}
 
 func (j *testingJob) Run(ctx *WorkContext) error {
 	time.Sleep(j.delay)
@@ -183,6 +185,7 @@ func TestPool_Hook(t *testing.T) {
 }
 
 func TestPool_Load(t *testing.T) {
+	t.Parallel()
 	p := NewPool(5, true, nil)
 	defer p.Destroy()
 	for idx := range make([]int, 100000) {
@@ -261,6 +264,8 @@ func TestPool_Resize(t *testing.T) {
 	p.Resize(10)
 	p.Resize(1)
 	p.Resize(10)
+	// Wait for pool to stabilise
+	time.Sleep(time.Millisecond)
 	s := p.State()
 	if s.Workers != 10 {
 		t.Fatal("expected 10 workers, got ", s.Workers)

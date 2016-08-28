@@ -25,15 +25,15 @@ func adjust(length int, adj int) int {
 }
 
 func (p *pool) resolveWorkers(target int) {
-	length := len(p.workers)
-	if target == len(p.workers) {
+	length := len(p.actWorkers)
+	if target == len(p.actWorkers) {
 		return
 		// if we have too many workers then kill some off
 	} else if target < length {
 		var delta, i int = length - target, 0
-		for id, w := range p.workers {
+		for id, w := range p.actWorkers {
 			w.Signal <- sigterm
-			delete(p.workers, id)
+			delete(p.actWorkers, id)
 			i++
 			if i == delta {
 				return
@@ -44,10 +44,11 @@ func (p *pool) resolveWorkers(target int) {
 		for i := 0; i < target-length; i++ {
 			// create a worker
 			p.wkID++
+			p.wkCur++
 			id := p.wkID
 			w := newWorker(id, p.wIN, p.wOUT, p.wEXIT)
 			go w.Work()
-			p.workers[id] = w
+			p.actWorkers[id] = w
 		}
 	}
 }

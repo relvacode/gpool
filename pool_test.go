@@ -146,17 +146,17 @@ func TestPool_Status(t *testing.T) {
 	}
 	p.Close()
 	s := p.Status()
-	if s.Executing != 1 {
-		t.Fatal("wanted 1 executing, got ", s.Executing)
+	if s.Jobs.Executing != 1 {
+		t.Fatal("wanted 1 executing, got ", s.Jobs.Executing)
 	}
-	if s.Queued != 0 {
-		t.Fatal("wanted 0 queued, got ", s.Queued)
+	if s.Jobs.Queued != 0 {
+		t.Fatal("wanted 0 queued, got ", s.Jobs.Queued)
 	}
-	if s.Finished != 0 {
-		t.Fatal("wanted 0 finished, got ", s.Finished)
+	if s.Jobs.Finished != 0 {
+		t.Fatal("wanted 0 finished, got ", s.Jobs.Finished)
 	}
-	if s.Failed != 0 {
-		t.Fatal("wanted 0 failed, got ", s.Failed)
+	if s.Jobs.Failed != 0 {
+		t.Fatal("wanted 0 failed, got ", s.Jobs.Failed)
 	}
 	if s.Error != nil {
 		t.Fatal("wanted nil error, got ", s.Error)
@@ -293,8 +293,8 @@ func TestPool_Resize(t *testing.T) {
 	// Wait for pool to stabilise
 	time.Sleep(time.Millisecond)
 	s := p.Status()
-	if s.Active != 10 {
-		t.Fatal("expected 10 workers, got ", s.Active)
+	if s.Workers.Active != 10 {
+		t.Fatal("expected 10 workers, got ", s.Workers.Active)
 	}
 }
 

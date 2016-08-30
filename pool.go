@@ -119,15 +119,20 @@ func (p *pool) stat() *PoolStatus {
 		err = &s
 	}
 	return &PoolStatus{
-		Error:     err,
-		Executing: p.jcExecuting,
-		Failed:    p.jcFailed,
-		Finished:  p.jcFinished,
-		Queued:    len(p.jQ),
+		Error: err,
+		Jobs: PoolJobsStatus{
+			Executing: p.jcExecuting,
+			Failed:    p.jcFailed,
+			Finished:  p.jcFinished,
+			Queued:    len(p.jQ),
+		},
+		Workers: PoolWorkersStatus{
+			Active:      len(p.actWorkers),
+			All:         p.wkCur,
+			Terminating: p.wkCur - len(p.actWorkers),
+		},
 
-		Active: p.wkCur,
-		Dead:   len(p.actWorkers),
-		State:  p.state,
+		State: p.state,
 	}
 }
 

@@ -1,5 +1,7 @@
 package gpool
 
+import "context"
+
 type signal int
 
 const (
@@ -10,7 +12,7 @@ const (
 // workRequestPacket is used to signal to the pool that a worker is ready to receive another job
 type workRequestPacket struct {
 	Worker   int
-	Response chan *JobState
+	Response chan *JobStatus
 }
 
 func adjust(length int, adj int) int {
@@ -26,7 +28,7 @@ func adjust(length int, adj int) int {
 
 func (p *pool) resolveWorkers(target int) {
 	length := len(p.actWorkers)
-	if target == len(p.actWorkers) {
+	if target == length {
 		return
 		// if we have too many workers then kill some off
 	} else if target < length {
@@ -53,7 +55,7 @@ func (p *pool) resolveWorkers(target int) {
 	}
 }
 
-func newWorker(ID int, in chan *workRequestPacket, out chan *JobState, done chan int) *worker {
+func newWorker(ID int, in chan *workRequestPacket, out chan *JobStatus, done chan int) *worker {
 	return &worker{
 		ID:     ID,
 		Signal: make(chan signal, 2),
@@ -68,7 +70,7 @@ type worker struct {
 	Signal chan signal
 
 	rIN  chan *workRequestPacket
-	out  chan *JobState
+	out  chan *JobStatus
 	done chan int
 }
 
@@ -82,7 +84,7 @@ func (wk *worker) Work() {
 
 	req := &workRequestPacket{
 		Worker:   wk.ID,
-		Response: make(chan *JobState),
+		Response: make(chan *JobStatus),
 	}
 
 cycle:
@@ -99,13 +101,8 @@ cycle:
 				continue cycle
 			}
 
-			// Create a work context for this job using the Job request ID
-			cancel := make(chan bool, 1)
+			ctx, cancel := context.WithCancel(s.Context())
 			result := make(chan error, 1)
-			ctx := &WorkContext{
-				WorkID: s.ID,
-				Cancel: cancel,
-			}
 
 			// Begin executing the job
 			go func() {
@@ -115,13 +112,15 @@ cycle:
 			select {
 			case sig := <-wk.Signal:
 				if sig == sigkill {
-					close(cancel)
+					cancel()
 				}
 				s.Error = <-result
 				wk.out <- s
+				cancel()
 				break cycle
 			case s.Error = <-result:
 				wk.out <- s
+				cancel()
 			}
 		}
 	}

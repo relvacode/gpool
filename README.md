@@ -50,13 +50,13 @@ There are a few ways to submit a `Job` to the `Pool`
 j := new(MyJob)
 
 // Begin queueing the Job
-p.Queue(nil, j)
+p.Queue(context.Background(), j)
 
 // Wait for the Job to start executing
-p.Start(nil, j)
+p.Start(context.Background(), j)
 
 // Wait for the Job to finish and return the error
-p.Execute(nil, j)
+p.Execute(context.Background(), j)
 ```
 
 Finally, when done make sure you call `Pool.Close()` to close the pool.

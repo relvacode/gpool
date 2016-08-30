@@ -15,7 +15,7 @@ _gPool is an execution engine for a pool of workers_
   * Queuing, with custom schedulers
   * Lock-free
   * Hooks
-  * Cancellable execution
+  * Context based execution
 
 # Usage
 
@@ -34,7 +34,7 @@ type Job interface {
 
 	// Run the Job.
 	// If propagation is enabled on the Pool then the error returned it is propagated up and the Pool is killed.
-	Run(*WorkContext) error
+	Run(context.Context) error
 
 	// Abort is used for when a Job is in the queue and needs to be removed (via call to Pool.Kill() for example).
 	// Abort is never called if the Job is already in a starting state, if it is then the Cancel channel of the
@@ -50,13 +50,13 @@ There are a few ways to submit a `Job` to the `Pool`
 j := new(MyJob)
 
 // Begin queueing the Job
-p.Queue(j)
+p.Queue(nil, j)
 
 // Wait for the Job to start executing
-p.Start(j)
+p.Start(nil, j)
 
 // Wait for the Job to finish and return the error
-p.Execute(j)
+p.Execute(nil, j)
 ```
 
 Finally, when done make sure you call `Pool.Close()` to close the pool.

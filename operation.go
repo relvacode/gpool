@@ -23,6 +23,18 @@ const (
 	conditionDestroyRelease
 )
 
+// A Request is a pool request to execute a Job in the pool.
+type Request struct {
+	// Job is the job to be executed.
+	Job Job
+	// Context may be optionally supplied to provide values to the Job.
+	// A context's Done method is only evaluated during execution of the Job.
+	Context context.Context
+	// CallbackCondition describes when the ticket requesting this Job is acknowledged.
+	// Defaults to ConditionNow (callback on Queue).
+	CallbackCondition Condition
+}
+
 type payload struct {
 	data interface{}
 }
@@ -69,17 +81,6 @@ func (o *op) Acknowledge(err error) {
 
 func (o *op) Receive() chan error {
 	return o.r
-}
-
-// A Request is a pool request to execute a Job in the pool.
-type Request struct {
-	// Job is the job to be executed.
-	Job Job
-	// Context may be optionally supplied to provide values to the Job.
-	Context context.Context
-	// CallbackCondition describes when the ticket requesting this Job is acknowledged.
-	// Defaults to ConditionNow (callback on Queue).
-	CallbackCondition Condition
 }
 
 // opJob submits a Request to the pool

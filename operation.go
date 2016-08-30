@@ -2,7 +2,7 @@ package gpool
 
 import (
 	"context"
-	"github.com/pkg/errors"
+	"errors"
 	"time"
 )
 

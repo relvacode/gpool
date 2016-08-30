@@ -9,6 +9,7 @@ _gPool is an execution engine for a pool of workers_
 
 # Features
 
+  * Zero import dependencies
   * Optional error propagation
   * Dynamic resizing
   * Queuing, with custom schedulers

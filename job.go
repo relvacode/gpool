@@ -1,6 +1,7 @@
 package gpool
 
 import (
+	"context"
 	"fmt"
 )
 
@@ -8,10 +9,10 @@ import (
 // The contents of a Hook function should NOT perform any requests against the Pool
 // as a Hook is called from inside a bus cycle, there is no listener for additional requests in this period which will cause a deadlock.
 // Hook functions should be quick as calling a Hook blocks further processing of the pool.
-type Hook func(*JobState)
+type Hook func(*JobStatus)
 
 // JobFn is a function that is executed as a pool Job.
-type JobFn func(*WorkContext) error
+type JobFn func(context.Context) error
 
 // NewJob wraps a Header and JobFn to implement a Job.
 // AbortFn is optional and is a function to be called if the Job is aborted before it can be started.
@@ -30,7 +31,7 @@ type Job interface {
 
 	// Run the Job.
 	// If propagation is enabled on the Pool then the error returned it is propagated up and the Pool is killed.
-	Run(*WorkContext) error
+	Run(context.Context) error
 
 	// Abort is used for when a Job is in the queue and needs to be removed (via call to Pool.Kill() for example).
 	// Abort is never called if the Job is already in a starting state, if it is then the Cancel channel of the
@@ -62,6 +63,6 @@ func (j *job) Abort() {
 	}
 }
 
-func (j *job) Run(ctx *WorkContext) error {
+func (j *job) Run(ctx context.Context) error {
 	return j.rFn(ctx)
 }

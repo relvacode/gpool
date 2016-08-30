@@ -1,6 +1,7 @@
 package gpool
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -24,7 +25,7 @@ func (j *testingJob) Abort() {
 	j.aborted = true
 }
 
-func (j *testingJob) Run(ctx *WorkContext) error {
+func (j *testingJob) Run(ctx context.Context) error {
 	time.Sleep(j.delay)
 	if j.wait != nil {
 		<-j.wait
@@ -38,7 +39,7 @@ func TestPool_Destroy(t *testing.T) {
 
 	res := make(chan interface{})
 	go func() {
-		res <- p.State()
+		res <- p.Status()
 	}()
 
 	select {
@@ -46,6 +47,31 @@ func TestPool_Destroy(t *testing.T) {
 		t.Fatal("bus isn't dead")
 	case <-time.After(time.Microsecond):
 		return
+	}
+}
+
+func TestPool_Context(t *testing.T) {
+	p := NewPool(1, false, nil)
+	defer p.Destroy()
+
+	var id string
+	var value interface{}
+	p.Execute(context.WithValue(context.Background(), "key", "value"), NewJob(Header("test"), func(ctx context.Context) error {
+		id, _ = ContextJobID(ctx)
+		value = ctx.Value("key")
+		return nil
+	}, nil))
+
+	if id == "" {
+		t.Fatal("expected ID but got nothing")
+	}
+	if value == nil {
+		t.Fatal("nil value")
+	}
+	if str, ok := value.(string); !ok {
+		t.Fatal("value is not string")
+	} else if str != "value" {
+		t.Fatal("expected 'value', got ", str)
 	}
 }
 
@@ -59,8 +85,8 @@ func TestPool_Error(t *testing.T) {
 		name: "TestPool_Error_Propagation",
 		err:  pErr,
 	}
-	if err := p.Start(j); err != nil {
-		t.Fatal(p)
+	if err := p.Start(nil, j); err != nil {
+		t.Fatal("unexpected error: ", err)
 	}
 	p.Close()
 	p.Wait()
@@ -79,7 +105,7 @@ func TestPool_Execute_OK(t *testing.T) {
 	j := &testingJob{
 		name: "TestPool_Execute_OK",
 	}
-	if err := p.Execute(j); err != nil {
+	if err := p.Execute(nil, j); err != nil {
 		t.Fatal(err)
 	}
 	p.Close()
@@ -96,7 +122,7 @@ func TestPool_Execute_Error(t *testing.T) {
 		name: "TestPool_Execute_Error",
 		err:  mkErr,
 	}
-	if err := p.Execute(j); err != nil {
+	if err := p.Execute(nil, j); err != nil {
 		if err != mkErr {
 			t.Fatalf("wanted %s, got %s", mkErr, err)
 		}
@@ -106,7 +132,7 @@ func TestPool_Execute_Error(t *testing.T) {
 	p.Close()
 }
 
-func TestPool_State(t *testing.T) {
+func TestPool_Status(t *testing.T) {
 	p := NewPool(1, true, nil)
 
 	ok := make(chan bool)
@@ -115,11 +141,11 @@ func TestPool_State(t *testing.T) {
 		name: "TestPool_State",
 		wait: ok,
 	}
-	if err := p.Start(j); err != nil {
+	if err := p.Start(nil, j); err != nil {
 		t.Fatal(err)
 	}
 	p.Close()
-	s := p.State()
+	s := p.Status()
 	if s.Executing != 1 {
 		t.Fatal("wanted 1 executing, got ", s.Executing)
 	}
@@ -156,20 +182,20 @@ func TestPool_Hook(t *testing.T) {
 	defer p.Destroy()
 
 	var queued, started, stopped bool
-	p.Hook.Queue = func(*JobState) {
+	p.Hook.Queue = func(*JobStatus) {
 		queued = true
 	}
-	p.Hook.Start = func(*JobState) {
+	p.Hook.Start = func(*JobStatus) {
 		started = true
 	}
-	p.Hook.Stop = func(*JobState) {
+	p.Hook.Stop = func(*JobStatus) {
 		stopped = true
 	}
 
 	j := &testingJob{
 		name: "TestPool_Hook",
 	}
-	if err := p.Execute(j); err != nil {
+	if err := p.Execute(nil, j); err != nil {
 		t.Fatal(err)
 	}
 	p.Close()
@@ -189,7 +215,7 @@ func TestPool_Load(t *testing.T) {
 	p := NewPool(5, true, nil)
 	defer p.Destroy()
 	for idx := range make([]int, 100000) {
-		p.ExecuteASync(&testingJob{
+		p.ExecuteASync(nil, &testingJob{
 			name: fmt.Sprintf("load.%d", idx),
 		})
 	}
@@ -209,7 +235,7 @@ func TestPool_Send_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := p.Queue(&testingJob{
+			if err := p.Queue(nil, &testingJob{
 				name: "Concurrency_Test",
 			}); err != nil {
 				t.Fatal(err)
@@ -234,8 +260,8 @@ func TestPool_Kill(t *testing.T) {
 	p := NewPool(1, true, nil)
 	defer p.Destroy()
 	cancelled := make(chan bool)
-	p.Start(NewJob(Header("Testing"), func(ctx *WorkContext) error {
-		<-ctx.Cancel
+	p.Start(nil, NewJob(Header("Testing"), func(ctx context.Context) error {
+		<-ctx.Done()
 		close(cancelled)
 		return nil
 	}, nil))
@@ -266,9 +292,9 @@ func TestPool_Resize(t *testing.T) {
 	p.Resize(10)
 	// Wait for pool to stabilise
 	time.Sleep(time.Millisecond)
-	s := p.State()
-	if s.Workers != 10 {
-		t.Fatal("expected 10 workers, got ", s.Workers)
+	s := p.Status()
+	if s.Active != 10 {
+		t.Fatal("expected 10 workers, got ", s.Active)
 	}
 }
 
@@ -278,7 +304,7 @@ func Example() {
 
 	// Example JobFn.
 	// After 10 seconds the job will print Hello, World! and exit
-	JobFn := func(ctx *WorkContext) error {
+	JobFn := func(ctx context.Context) error {
 		<-time.After(10 * time.Second)
 		fmt.Println("Hello, World!")
 		return nil
@@ -287,8 +313,9 @@ func Example() {
 	Job := NewJob(
 		Header("MyPoolJob"), JobFn, nil,
 	)
-	// Send it to the Pool
-	p.Start(Job)
+	// Send it to the Pool.
+	// Supplying a context to the pool is optional.
+	p.Start(nil, Job)
 
 	// Close the pool after all messages are sent
 	p.Close()
@@ -308,7 +335,7 @@ func BenchmarkPool_Execute(b *testing.B) {
 		name: "benchmark",
 	}
 	for i := 0; i < b.N; i++ {
-		e := p.Queue(j)
+		e := p.Queue(nil, j)
 		if e != nil {
 			b.Fatal(e)
 		}

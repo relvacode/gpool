@@ -2,8 +2,8 @@
 package gpool
 
 import (
+	"context"
 	"errors"
-	"time"
 )
 
 // ErrClosedPool indicates that a send was attempted on a pool which has already been closed.
@@ -14,11 +14,6 @@ var ErrKilled = errors.New("pool killed by signal")
 
 // ErrWorkerCount indicates that a request to modify worker size is invalid.
 var ErrWorkerCount = errors.New("invalid worker count request")
-
-// ErrTimeout indicates that a timeout request had timed out.
-var ErrTimeout = errors.New("request timed out")
-
-var ErrUnknownJob = errors.New("job id unknown")
 
 // Pool is the main pool struct containing a bus and workers.
 // Pool should always be invoked via NewPool().
@@ -43,14 +38,15 @@ func NewPool(Workers int, Propagate bool, Scheduler Scheduler) *Pool {
 // ack attempts to send the ticket to the ticket queue.
 // First waits for acknowledgement of ticket, then waits for the return message.
 // In future, there may be a timeout around the return message.
-func (p *Pool) ack(t ticket) error {
-	p.pool.tIN <- t
-	return <-t.r
+func (p *Pool) ack(t operation) error {
+	p.pool.opIN <- t
+	return <-t.Receive()
 }
 
-func (p *Pool) payload(t ticket) interface{} {
-	e := p.ack(t)
-	return e.(*returnPayload).data
+func (p *Pool) push(j Job, when Condition, ctx context.Context) chan error {
+	t := &opJob{op: newOP(), Request: &Request{Job: j, CallbackCondition: when, Context: ctx}}
+	p.opIN <- t
+	return t.Receive()
 }
 
 // Kill sends a kill request to the pool bus.
@@ -58,7 +54,7 @@ func (p *Pool) payload(t ticket) interface{} {
 // If the pool has already been killed or closed ErrClosedPool is returned.
 // No additional jobs may be sent to the pool after Kill().
 func (p *Pool) Kill() error {
-	return p.ack(newTicket(tReqKill, nil))
+	return p.ack(&opSetIntent{op: newOP(), intent: intentKill})
 }
 
 // Close sends a graceful close request to the pool bus.
@@ -66,7 +62,7 @@ func (p *Pool) Kill() error {
 // Close does not return an error if the pool is already closed.
 // No additional jobs may be sent to the pool after Close().
 func (p *Pool) Close() error {
-	return p.ack(newTicket(tReqClose, nil))
+	return p.ack(&opSetIntent{op: newOP(), intent: intentClose})
 }
 
 // Destroy sends a bus destroy request to the pool.
@@ -74,100 +70,83 @@ func (p *Pool) Close() error {
 // Meaning there will be no listener for further ticket requests causing a deadlock.
 // When calling Destroy() the Pool is marked as wanting close after the Job queue has been emptied.
 func (p *Pool) Destroy() error {
-	return p.ack(newTicket(tReqDestroy, nil))
+	return p.ack(&opAcknowledgeCondition{op: newOP(), when: conditionDestroyRelease})
 }
 
-// Wait will block until all of the workers in the pool have exited.
-// As such it is important that the caller either uses WaitTimeout()
-// or ensures a call to Pool.Close will be made.
-// If all workers have already exited Wait() is resolved instantly.
-func (p *Pool) Wait() error {
-	return p.ack(newTicket(tReqWait, nil))
-}
-
+// WaitAsync performs the same function as Wait but returns an asynchronous channel for the result of Wait.
 func (p *Pool) WaitAsync() chan error {
-	t := newTicket(tReqWait, nil)
-	p.tIN <- t
+	t := &opAcknowledgeCondition{op: newOP(), when: conditionWaitRelease}
+	p.opIN <- t
 	return t.r
 }
 
-// WaitTimeout waits for the pool workers to exit unless the specified timeout is exceeded in which case ErrTimeout is returned.
-func (p *Pool) WaitTimeout(timeout time.Duration) error {
-	t := newTicket(tReqWait, nil)
-	p.tIN <- t
-	select {
-	case <-time.After(timeout):
-		return ErrTimeout
-	case err := <-t.r:
-		return err
-	}
+// Wait will block until all of the workers in the pool have exited.
+// As such it is important that the caller ensures the Pool will be closed or killed.
+// If the pool state is Done; Wait() is resolved instantly.
+func (p *Pool) Wait() error {
+	return <-p.WaitAsync()
+}
+
+// RequestAsync performs the same function as Request but returns an asynchronous channel for the result of execution.
+func (p *Pool) RequestAsync(r *Request) chan error {
+	t := &opJob{op: newOP(), Request: r}
+	p.opIN <- t
+	return t.Receive()
+}
+
+// Request submits a custom Job request to the pool.
+func (p *Pool) Request(r *Request) error {
+	return <-p.RequestAsync(r)
 }
 
 // Queue puts the given Job on the Pool queue and returns nil if the Job was successfully queued.
-func (p *Pool) Queue(job Job) error {
+func (p *Pool) Queue(ctx context.Context, job Job) error {
 	if job == nil {
 		panic("send of nil job")
 	}
-	return p.ack(newTicket(tReqJobQueue, job))
+	return <-p.push(job, ConditionNow, ctx)
 }
 
 // QueueBatch queues one or more jobs at the same time.
-func (p *Pool) QueueBatch(jobs []Job) error {
+// If ctx is not nil then that context is used for all Jobs in this batch.
+func (p *Pool) QueueBatch(ctx context.Context, jobs []Job) error {
 	if len(jobs) > 0 {
-		return p.ack(newTicket(tReqBatchJobQueue, jobs))
+		requests := []*Request{}
+		for _, j := range jobs {
+			requests = append(requests, &Request{Job: j, Context: ctx})
+		}
+		return p.ack(&opJobBatch{op: newOP(), requests: requests})
 	}
 	return nil
 }
 
+// StartAsync performs the same function as Start but returns an asynchronous channel for the result of starting the Job.
+func (p *Pool) StartAsync(ctx context.Context, job Job) chan error {
+	if job == nil {
+		panic("send of nil job")
+	}
+	return p.push(job, ConditionJobStart, ctx)
+}
+
 // Start begins queueing a Job and waits for it to start executing before returning.
 // nil is returned if the Job successfully started to execute.
-func (p *Pool) Start(job Job) error {
-	if job == nil {
-		panic("send of nil job")
-	}
-	return p.ack(newTicket(tReqJobStartCallback, job))
-}
-
-// StartAsync performs the same function as Start but returns an asynchronous channel for the result of starting the Job.
-func (p *Pool) StartAsync(job Job) chan error {
-	if job == nil {
-		panic("send of nil job")
-	}
-	t := newTicket(tReqJobStartCallback, job)
-	p.pool.tIN <- t
-	return t.r
-}
-
-// Execute queues and waits for a given Job to execute in the Pool.
-// If the Job was successfully scheduled then the error returned here is the error returned from Job.Run().
-func (p *Pool) Execute(job Job) error {
-	if job == nil {
-		panic("send of nil job")
-	}
-	return p.ack(newTicket(tReqJobStopCallback, job))
+func (p *Pool) Start(ctx context.Context, job Job) error {
+	return <-p.StartAsync(ctx, job)
 }
 
 // ExecuteASync performs the same function as Execute but returns an asynchronous channel
 // for the result of Job execution.
-func (p *Pool) ExecuteASync(job Job) chan error {
+func (p *Pool) ExecuteASync(ctx context.Context, job Job) chan error {
 	if job == nil {
 		panic("send of nil job")
 	}
-	t := newTicket(tReqJobStopCallback, job)
-	p.pool.tIN <- t
-	return t.r
+	return p.push(job, ConditionJobStop, ctx)
 }
 
-// State returns a snapshot of the current Pool state.
-// Including current Job status count, running workers and general pool health.
-func (p *Pool) State() *PoolState {
-	data := p.ack(newTicket(tReqStat, nil))
-	return data.(*returnPayload).data.(*PoolState)
-}
-
-// Error returns the current error present in the pool (if any).
-func (p *Pool) Error() error {
-	return p.ack(newTicket(tReqGetError, nil))
+// Execute queues and waits for a given Job to execute in the Pool.
+// If the Job was successfully scheduled then the error returned here is the error returned from Job.Run().
+func (p *Pool) Execute(ctx context.Context, job Job) error {
+	return <-p.ExecuteASync(ctx, job)
 }
 
 // Resize changes the amount of executing workers in the pool by the requested amount.
@@ -176,7 +155,7 @@ func (p *Pool) Resize(Req int) error {
 	if Req < 1 {
 		return ErrWorkerCount
 	}
-	return p.ack(newTicket(tReqResize, Req))
+	return p.ack(&opResize{op: newOP(), target: Req})
 }
 
 // Grow grows the amount of workers running in the pool by the requested amount.
@@ -189,7 +168,7 @@ func (p *Pool) Grow(Req int) error {
 	if Req < 1 {
 		return ErrWorkerCount
 	}
-	return p.ack(newTicket(tReqGrow, Req))
+	return p.ack(&opResize{op: newOP(), alter: Req})
 }
 
 // Shrink shrinks the amount of target workers in the pool.
@@ -202,5 +181,22 @@ func (p *Pool) Shrink(Req int) error {
 	if Req < 1 {
 		return ErrWorkerCount
 	}
-	return p.ack(newTicket(tReqShrink, Req))
+	return p.ack(&opResize{op: newOP(), alter: -Req})
+}
+
+// Status returns a snapshot of the current Pool status.
+// Including current Job status count, running workers and general pool health.
+// The returned value may be nil if the state could not be retrieved.
+func (p *Pool) Status() *PoolStatus {
+	payload := p.ack(&opGetState{op: newOP()})
+	s, ok := data(payload)
+	if ok {
+		return s.(*PoolStatus)
+	}
+	return nil
+}
+
+// Error returns the current error present in the pool (if any).
+func (p *Pool) Error() error {
+	return p.ack(&opGetError{op: newOP()})
 }

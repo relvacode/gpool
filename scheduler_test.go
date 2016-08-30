@@ -1,6 +1,7 @@
 package gpool
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"testing"
@@ -31,7 +32,7 @@ func (j orderedJob) Header() fmt.Stringer {
 
 func (orderedJob) Abort() {}
 
-func (orderedJob) Run(*WorkContext) error {
+func (orderedJob) Run(context.Context) error {
 	time.Sleep(time.Millisecond)
 	return nil
 }
@@ -40,7 +41,7 @@ func testPoolSchedulingOrder(n int, scheduler Scheduler) []int {
 	p := NewPool(1, false, scheduler)
 
 	IDs := []int{}
-	p.Hook.Stop = func(js *JobState) {
+	p.Hook.Stop = func(js *JobStatus) {
 		if h, ok := js.Job().Header().(orderedJobHeader); ok {
 			IDs = append(IDs, h.i)
 		}
@@ -52,7 +53,7 @@ func testPoolSchedulingOrder(n int, scheduler Scheduler) []int {
 		jobs = append(jobs, newOrderedJob(i+1))
 	}
 
-	if err := p.QueueBatch(jobs); err != nil {
+	if err := p.QueueBatch(nil, jobs); err != nil {
 		return IDs
 	}
 

@@ -102,9 +102,6 @@ func (p *Pool) Request(r *Request) error {
 
 // Queue puts the given Job on the Pool queue and returns nil if the Job was successfully queued.
 func (p *Pool) Queue(ctx context.Context, job Job) error {
-	if job == nil {
-		panic("send of nil job")
-	}
 	return <-p.push(job, ConditionNow, ctx)
 }
 
@@ -123,9 +120,6 @@ func (p *Pool) QueueBatch(ctx context.Context, jobs []Job) error {
 
 // StartAsync performs the same function as Start but returns an asynchronous channel for the result of starting the Job.
 func (p *Pool) StartAsync(ctx context.Context, job Job) chan error {
-	if job == nil {
-		panic("send of nil job")
-	}
 	return p.push(job, ConditionJobStart, ctx)
 }
 
@@ -138,9 +132,6 @@ func (p *Pool) Start(ctx context.Context, job Job) error {
 // ExecuteASync performs the same function as Execute but returns an asynchronous channel
 // for the result of Job execution.
 func (p *Pool) ExecuteASync(ctx context.Context, job Job) chan error {
-	if job == nil {
-		panic("send of nil job")
-	}
 	return p.push(job, ConditionJobStop, ctx)
 }
 

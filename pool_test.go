@@ -57,7 +57,7 @@ func TestPool_Context(t *testing.T) {
 	var id string
 	var value interface{}
 	p.Execute(context.WithValue(context.Background(), "key", "value"), NewJob(Header("test"), func(ctx context.Context) error {
-		id, _ = ContextJobID(ctx)
+		id, _ = JobIDFromContext(ctx)
 		value = ctx.Value("key")
 		return nil
 	}, nil))

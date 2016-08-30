@@ -66,9 +66,10 @@ func (p *Pool) Close() error {
 }
 
 // Destroy sends a bus destroy request to the pool.
-// Once all workers have exited, if a Destroy() request is active then the bus will exit.
-// Meaning there will be no listener for further ticket requests causing a deadlock.
-// When calling Destroy() the Pool is marked as wanting close after the Job queue has been emptied.
+// Once all workers have exited, if a Destroy() request is active then the bus will exit
+// meaning there will be no listener for further requests.
+// The caller should ensure no additional requests are made to the pool after calling Destroy() to prevent a deadlock.
+// Calling destroy automatically marks the pool as closed.
 func (p *Pool) Destroy() error {
 	return p.ack(&opAcknowledgeCondition{op: newOP(), when: conditionDestroyRelease})
 }

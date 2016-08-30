@@ -40,7 +40,7 @@ type Job interface {
 	Abort()
 }
 
-// Header implements fmt.Stringer and can be used as a Header for NewJob().
+// Header wraps a string to provide an fmt.Stringer interface.
 type Header string
 
 func (s Header) String() string {

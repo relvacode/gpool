@@ -11,14 +11,14 @@ func TestJob_Abort(t *testing.T) {
 		name: "blocking",
 		wait: block,
 	}
-	if err := p.Start(j0); err != nil {
+	if err := p.Start(nil, j0); err != nil {
 		t.Fatal(err)
 	}
 
 	j1 := &testingJob{
 		name: "waiting job",
 	}
-	if err := p.Queue(j1); err != nil {
+	if err := p.Queue(nil, j1); err != nil {
 		t.Fatal(err)
 	}
 	p.Close()

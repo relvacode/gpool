@@ -6,32 +6,9 @@ import (
 )
 
 const (
-	// Queued means the Job is in the Pool queue.
-	Queued string = "Queued"
-	// Executing means the Job is executing on a worker.
-	Executing string = "Executing"
-	// Failed means the Job failed because the Run() function returned a non-nil error.
-	Failed string = "Failed"
-	// Finished means the Job completed because the Run() function returned a nil error.
-	Finished string = "Finished"
-)
-
-const (
-	_ int = iota
-	wantStop
-	wantKill
-)
-
-const (
-	// OK means Pool has no state, or is running.
-	OK int = iota
-	// Closed means Pool is closed, no more Job requests may be made
-	// but currently executing and queued Jobs will continue to be executed.
-	Closed
-	// Killed means the Pool has been killed via error propagation or Kill() call.
-	Killed
-	// Done means the queue is empty and all workers have exited.
-	Done
+	intentNone int = iota
+	intentClose
+	intentKill
 )
 
 func newPool(target int, propagate bool, scheduler Scheduler) *pool {
@@ -40,10 +17,11 @@ func newPool(target int, propagate bool, scheduler Scheduler) *pool {
 	}
 	p := &pool{
 		actWorkers: make(map[int]*worker),
-		tIN:        make(chan ticket),
+		opIN:       make(chan operation),
 		wIN:        make(chan *workRequestPacket),
-		wOUT:       make(chan *JobState),
+		wOUT:       make(chan *JobStatus),
 		wEXIT:      make(chan int),
+		tickets:    make(map[Condition][]operation),
 		propagate:  propagate,
 		scheduler:  scheduler,
 	}
@@ -53,22 +31,21 @@ func newPool(target int, propagate bool, scheduler Scheduler) *pool {
 }
 
 type pool struct {
-	jQ []*JobState // Job queue
+	jQ []*JobStatus // Job queue
 
 	actWorkers map[int]*worker
 	wkCur      int
 	wkID       int
 
-	jcQueued    int
 	jcExecuting int
 	jcFailed    int
 	jcFinished  int
 
 	wIN   chan *workRequestPacket
-	wOUT  chan *JobState // Return
-	wEXIT chan int       // Worker done signal
+	wOUT  chan *JobStatus // Return
+	wEXIT chan int        // Worker done signal
 
-	tIN chan ticket // Frontend ticket requests
+	opIN chan operation // Frontend ticket requests
 
 	err error
 
@@ -79,29 +56,16 @@ type pool struct {
 		Stop  Hook // Job stops
 	}
 
-	state  int // Current pool state
-	intent int // Pool status intent for next cycle
+	state  PoolState // Current pool state
+	intent int       // Pool status intent for next cycle
 
-	pendWait    []ticket
-	pendDestroy []ticket
+	tickets map[Condition][]operation
 
 	scheduler Scheduler
 	propagate bool // Propagate job errors
 }
 
-func (p *pool) putQueueState(js *JobState) {
-	p.jQ = append(p.jQ, js)
-	js.State = Queued
-	t := time.Now()
-	js.QueuedOn = &t
-	p.jcQueued++
-	if p.Hook.Queue != nil {
-		p.Hook.Queue(js)
-	}
-}
-
-func (p *pool) putStartState(js *JobState) {
-	p.jcQueued--
+func (p *pool) putStartState(js *JobStatus) {
 	p.jcExecuting++
 	js.State = Executing
 	t := time.Now()
@@ -113,12 +77,12 @@ func (p *pool) putStartState(js *JobState) {
 	if p.Hook.Start != nil {
 		p.Hook.Start(js)
 	}
-	if js.t.t == tReqJobStartCallback {
-		js.t.r <- nil
+	if js.t.Condition() == ConditionJobStart {
+		js.t.Acknowledge(p.err)
 	}
 }
 
-func (p *pool) putStopState(js *JobState) {
+func (p *pool) putStopState(js *JobStatus) {
 	p.scheduler.Unload(js)
 	p.jcExecuting--
 	if js.Error != nil {
@@ -136,33 +100,34 @@ func (p *pool) putStopState(js *JobState) {
 
 	if js.Error != nil && p.propagate {
 		p.err = js.Error
-		if p.intent == OK {
-			p.intent = wantKill
+		if p.intent == intentNone {
+			p.intent = intentKill
 		}
 	}
 	if p.Hook.Stop != nil {
 		p.Hook.Stop(js)
 	}
-	if js.t.t == tReqJobStopCallback {
-		js.t.r <- js.Error
+	if js.t.Condition() == ConditionJobStop {
+		js.t.Acknowledge(js.Error)
 	}
 }
 
-func (p *pool) stat() *PoolState {
+func (p *pool) stat() *PoolStatus {
 	var err *string
 	if p.err != nil {
 		s := p.err.Error()
 		err = &s
 	}
-	return &PoolState{
+	return &PoolStatus{
 		Error:     err,
 		Executing: p.jcExecuting,
 		Failed:    p.jcFailed,
 		Finished:  p.jcFinished,
-		Queued:    p.jcQueued,
+		Queued:    len(p.jQ),
 
-		Workers: p.wkCur,
-		State:   p.state,
+		Active: p.wkCur,
+		Dead:   len(p.actWorkers),
+		State:  p.state,
 	}
 }
 
@@ -170,11 +135,15 @@ func (p *pool) stat() *PoolState {
 func (p *pool) abortQueue(err error) {
 	for _, jr := range p.jQ {
 		jr.Job().Abort()
+		// Do not respond if condition is now (on queue).
+		if jr.t.Condition() != ConditionNow {
+			jr.t.Acknowledge(err)
+		}
 	}
 	p.jQ = p.jQ[:0]
 }
 
-func (p *pool) schedule() (j *JobState, next time.Duration) {
+func (p *pool) schedule() (j *JobStatus, next time.Duration) {
 	if len(p.jQ) == 0 {
 		return
 	}
@@ -213,15 +182,15 @@ func (p *pool) bus() {
 
 	workInputReceiver := selectRecv(p.wIN)
 	nilInputReceiver := selectRecv(nil)
-	cases := []reflect.SelectCase{selectRecv(p.tIN), selectRecv(p.wOUT), selectRecv(p.wEXIT), workInputReceiver}
+	cases := []reflect.SelectCase{selectRecv(p.opIN), selectRecv(p.wOUT), selectRecv(p.wEXIT), workInputReceiver}
 
 cycle:
 	for {
 		// Processes intent from last cycle
 		switch p.intent {
-		case wantKill:
+		case intentKill:
 			if p.state >= Killed {
-				p.intent = OK
+				p.intent = intentNone
 				break
 			}
 			if p.err == nil {
@@ -238,13 +207,13 @@ cycle:
 			p.abortQueue(p.err)
 
 			p.state = Killed
-			p.intent = OK
-		case wantStop:
+			p.intent = intentNone
+		case intentClose:
 			if len(p.jQ) > 0 {
 				break
 			}
 			if p.state >= Closed {
-				p.intent = OK
+				p.intent = intentNone
 				break
 			}
 			// Close remaining workers
@@ -253,19 +222,21 @@ cycle:
 				delete(p.actWorkers, idx)
 			}
 			p.state = Closed
-			p.intent = OK
+			p.intent = intentNone
 		}
-		// If pool state is done without any intention and the queue is zero length
-		if p.state == Done && p.intent == OK {
+		// If pool state is done without any intention
+		if p.state == Done && p.intent == intentNone {
 			if len(p.jQ) != 0 {
 				p.abortQueue(p.err)
 			}
 			// Resolve pending waits
-			p.pendWait = acknowledge(p.err, p.pendWait...)
+			if tickets, ok := p.tickets[conditionWaitRelease]; ok && len(tickets) > 0 {
+				p.tickets[conditionWaitRelease] = acknowledge(p.err, tickets...)
+			}
 
 			// If pending destroys then resolve and exit bus.
-			if len(p.pendDestroy) > 0 {
-				p.pendDestroy = acknowledge(p.err, p.pendDestroy...)
+			if tickets, ok := p.tickets[conditionDestroyRelease]; ok && len(tickets) > 0 {
+				p.tickets[conditionDestroyRelease] = acknowledge(p.err, tickets...)
 				break cycle
 			}
 		}
@@ -291,9 +262,12 @@ cycle:
 		selected, inf, _ := reflect.Select(cases)
 		switch selected {
 		case 0: // Ticket request
-			p.processTicketRequest(inf.Interface().(ticket))
+			t := inf.Interface().(operation)
+			if err := t.Do(p); err != nil || t.Condition() == ConditionNow {
+				t.Acknowledge(err)
+			}
 		case 1: // Job finished
-			j := inf.Interface().(*JobState)
+			j := inf.Interface().(*JobStatus)
 			p.putStopState(j)
 		case 2: // Worker finished
 			id := inf.Interface().(int)
@@ -320,8 +294,8 @@ cycle:
 
 			// Valid job received from scheduler
 			if j != nil {
-				wkr.Response <- j
 				p.putStartState(j)
+				wkr.Response <- j
 				continue
 			} else {
 				wkr.Response <- nil

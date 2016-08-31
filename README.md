@@ -1,21 +1,20 @@
-# gPool - Pool Based Job Execution
-
 [![Build Status](https://travis-ci.org/relvacode/gpool.svg?branch=master)](https://travis-ci.org/relvacode/gpool) [![GoDoc](https://godoc.org/github.com/relvacode/gpool?status.svg)](https://godoc.org/github.com/relvacode/gpool)
 [![Go Report Card](https://goreportcard.com/badge/github.com/relvacode/gpool)](https://goreportcard.com/report/github.com/relvacode/gpool)
 
-_gPool is an execution engine for a pool of workers_
+gpool is an execution engine for a pool of concurrent workers
 
 `import "github.com/relvacode/gpool"`
 
 # Features
 
-  * Zero import dependencies
+  * Lock-free and concurrency safe
+  * Context based execution
+  * Queuing
+  * Custom schedulers
   * Optional error propagation
   * Dynamic resizing
-  * Queuing, with custom schedulers
-  * Lock-free
+  * Zero import dependencies
   * Hooks
-  * Context based execution
 
 # Usage
 
@@ -25,42 +24,52 @@ Create a new pool with 5 workers, error propagation enabled and using the defaul
 p := NewPool(5, true, nil)
 ```
 
-Create your `Job` interface
+Create a `Job` interface or use `NewJob()` to make a `Job` from a function.
 
 ```go
-type Job interface {
-	// An identity header that implements String()
-	Header() fmt.Stringer
+// The header of our job
+h := gpool.Header("MyJob")
 
-	// Run the Job.
-	// If propagation is enabled on the Pool then the error returned it is propagated up and the Pool is killed.
-	Run(context.Context) error
-
-	// Abort is used for when a Job is in the queue and needs to be removed (via call to Pool.Kill() for example).
-	// Abort is never called if the Job is already in a starting state, if it is then the Cancel channel of the
-	// WorkContext is used instead.
-	// Abort is called before the requesting ticket (Pool.Execute, Pool.Submit) is signalled.
-	Abort()
+// The function to be executed
+fn := func(ctx context.Context) error {
+    select {
+        case <-ctx.Done():
+          return ctx.Err()
+        case <-time.After(10 * time.Second):
+          fmt.Println("Hello, World!")
+          return nil
+    }
 }
+
+// Put then together into a job.
+j := NewJob(h, fn, nil)
 ```
 
-There are a few ways to submit a `Job` to the `Pool`
+Create a context to be used in the execution of the job.
+For now we don't need it to do anything so just use `context.Background()`.
 
 ```go
-j := new(MyJob)
-
-// Begin queueing the Job
-p.Queue(context.Background(), j)
-
-// Wait for the Job to start executing
-p.Start(context.Background(), j)
-
-// Wait for the Job to finish and return the error
-p.Execute(context.Background(), j)
+ctx := context.Background()
 ```
 
-Finally, when done make sure you call `Pool.Close()` to close the pool.
-You can use `Pool.Wait()` to wait for all jobs to finish.
+There are a few ways to submit a `Job` to a `Pool`.
+
+```go
+// Begin queueing the Job and return
+p.Queue(ctx, j)
+```
+
+```go
+// Wait for the Job to start executing and return
+p.Start(ctx, j)
+```
+
+```go
+// Wait for the Job to finish and return the error
+p.Execute(ctx, j)
+```
+
+Finally, when done make sure you call `Pool.Close()` to close the pool and `Pool.Wait()` to wait for all jobs to finish and workers to exit.
 
 ```go
 p.Close()

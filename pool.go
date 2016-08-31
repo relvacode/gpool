@@ -18,6 +18,7 @@ package gpool
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ErrClosedPool indicates that a send was attempted on a pool which has already been closed.
@@ -28,6 +29,19 @@ var ErrKilled = errors.New("pool killed by signal")
 
 // ErrWorkerCount indicates that a request to modify worker size is invalid.
 var ErrWorkerCount = errors.New("invalid worker count request")
+
+// DefaultScheduler is the Scheduler used by the Pool if one was not provided.
+var DefaultScheduler = FIFOScheduler{}
+
+// AsSoonAsPossible is a 0 duration that can be used when returning "timeout" in a Scheduler Evaluation call.
+// This indicates that the next Evaluate call should happen as soon as possible.
+const AsSoonAsPossible = time.Duration(0)
+
+// Hook is a function to be called when a job changes state.
+// Hooks are always called synchronously.
+// There is no listener for additional pool requests in this period which will cause a deadlock if attempted.
+// Hook functions should be quick as calling a hook blocks further processing of the pool.
+type Hook func(*JobStatus)
 
 // Pool is the main pool struct containing a bus and workers.
 // Pool should always be invoked via NewPool().

@@ -49,7 +49,6 @@ type pool struct {
 
 	err error
 
-	// See gpool.Hook for documentation.
 	Hook struct {
 		Queue Hook // Job becomes queued
 		Start Hook // Job starts
@@ -133,6 +132,35 @@ func (p *pool) stat() *PoolStatus {
 		},
 
 		State: p.state,
+	}
+}
+
+func (p *pool) resolveWorkers(target int) {
+	length := len(p.actWorkers)
+	if target == length {
+		return
+		// if we have too many workers then kill some off
+	} else if target < length {
+		var delta, i int = length - target, 0
+		for id, w := range p.actWorkers {
+			w.Signal <- sigterm
+			delete(p.actWorkers, id)
+			i++
+			if i == delta {
+				return
+			}
+		}
+		// otherwise start some up
+	} else {
+		for i := 0; i < target-length; i++ {
+			// create a worker
+			p.wkID++
+			p.wkCur++
+			id := p.wkID
+			w := newWorker(id, p.wIN, p.wOUT, p.wEXIT)
+			go w.Work()
+			p.actWorkers[id] = w
+		}
 	}
 }
 

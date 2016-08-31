@@ -5,11 +5,12 @@ import (
 	"fmt"
 )
 
-// Hook is a function to be called when a job changes state.
-// Hooks are always called synchronously.
-// There is no listener for additional pool requests in this period which will cause a deadlock if attempted.
-// Hook functions should be quick as calling a hook blocks further processing of the pool.
-type Hook func(*JobStatus)
+// Header wraps a string to provide an fmt.Stringer interface.
+type Header string
+
+func (s Header) String() string {
+	return string(s)
+}
 
 // JobFn is a function that is executed as a pool job.
 type JobFn func(context.Context) error
@@ -36,13 +37,6 @@ type Job interface {
 	// Abort is used for when a job is in the queue and needs to be removed (via call to Pool.Kill() for example).
 	// Abort is never called if the job is already in an executing state, if it is then the context is cancelled instead.
 	Abort()
-}
-
-// Header wraps a string to provide an fmt.Stringer interface.
-type Header string
-
-func (s Header) String() string {
-	return string(s)
 }
 
 type job struct {

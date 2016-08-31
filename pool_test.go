@@ -28,7 +28,11 @@ func (j *testingJob) Abort() {
 func (j *testingJob) Run(ctx context.Context) error {
 	time.Sleep(j.delay)
 	if j.wait != nil {
-		<-j.wait
+		select {
+		case <-ctx.Done():
+			return j.err
+		case <-j.wait:
+		}
 	}
 	return j.err
 }
@@ -50,7 +54,7 @@ func TestPool_Destroy(t *testing.T) {
 	}
 }
 
-func TestPool_Context(t *testing.T) {
+func TestPool_ContextValue(t *testing.T) {
 	p := NewPool(1, false, nil)
 	defer p.Destroy()
 
@@ -72,6 +76,30 @@ func TestPool_Context(t *testing.T) {
 		t.Fatal("value is not string")
 	} else if str != "value" {
 		t.Fatal("expected 'value', got ", str)
+	}
+}
+
+func TestPool_ContextCancel(t *testing.T) {
+	t.Parallel()
+	p := NewPool(1, false, nil)
+	defer p.Destroy()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	wait := make(chan bool)
+	defer close(wait)
+
+	p.Start(ctx, &testingJob{name: "contextcancel", wait: wait})
+	p.Close()
+	select {
+	case <-p.WaitAsync():
+		t.Fatal("pool closed without cancelling context")
+	case <-time.After(time.Second):
+	}
+	cancel()
+	select {
+	case <-p.WaitAsync():
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not cancel job")
 	}
 }
 
@@ -303,27 +331,31 @@ func Example() {
 	p := NewPool(5, true, FIFOScheduler{})
 
 	// Example JobFn.
-	// After 10 seconds the job will print Hello, World! and exit
+	// After 10 seconds the job will print 'Hello, World!' and exit unless the context is closed.
 	JobFn := func(ctx context.Context) error {
-		<-time.After(10 * time.Second)
-		fmt.Println("Hello, World!")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Second):
+			fmt.Println("Hello, World!")
+		}
 		return nil
 	}
-	// Create a Job with an Identifier
+	// Create a job with a simple string header.
 	Job := NewJob(
 		Header("MyPoolJob"), JobFn, nil,
 	)
-	// Send it to the Pool.
-	// Supplying a context to the pool is optional.
-	p.Start(nil, Job)
 
-	// Close the pool after all messages are sent
+	// Send it to the pool.
+	p.Start(context.Background(), Job)
+
+	// Close the pool after all jobs are sent.
 	p.Close()
 
-	// Wait for the pool to finish
-	e := p.Wait()
-	if e != nil {
-		// Do something with errors here
+	// Wait for the pool to finish.
+	err := p.Wait()
+	if err != nil {
+		// Do something with error here
 	}
 }
 

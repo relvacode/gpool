@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// ExecutionState is a string representation of the state of a Job in the Pool.
+// ExecutionState is a string representation of the state of a job in the pool.
 type ExecutionState string
 
 // OK returns true if the Execution state can be considered 'OK', i.e not 'Failed'.
@@ -14,20 +14,20 @@ func (exc ExecutionState) OK() bool {
 }
 
 const (
-	// Queued means the Job is in the Pool queue.
+	// Queued means the job is in the pool queue.
 	Queued ExecutionState = "Queued"
-	// Executing means the Job is executing on a worker.
+	// Executing means the job is executing on a worker.
 	Executing ExecutionState = "Executing"
-	// Failed means the Job failed because the Run() function returned a non-nil error.
+	// Failed means the job failed because the Run() function returned a non-nil error.
 	Failed ExecutionState = "Failed"
-	// Finished means the Job completed because the Run() function returned a nil error.
+	// Finished means the job completed because the Run() function returned a nil error.
 	Finished ExecutionState = "Finished"
 )
 
-// PoolState is a integer representing the state of the pool
+// PoolState is a integer representing the state of the pool.
 type PoolState int
 
-// String returns the string representation of this PoolState.
+// String returns the string representation of this state.
 func (s PoolState) String() string {
 	switch s {
 	case OK:
@@ -43,18 +43,18 @@ func (s PoolState) String() string {
 }
 
 const (
-	// OK means Pool has no state, or is running.
+	// OK means the pool has no state, or is running.
 	OK PoolState = iota
-	// Closed means Pool is closed, no more Job requests may be made
-	// but currently executing and queued Jobs will continue to be executed.
+	// Closed means pool is closed, no more job requests may be made
+	// but currently executing and queued jobs will continue to be executed.
 	Closed
-	// Killed means the Pool has been killed via error propagation or Kill() call.
+	// Killed means the pool has been killed via error propagation or Kill() call.
 	Killed
 	// Done means the queue is empty and all workers have exited.
 	Done
 )
 
-// PoolJobsStatus is a snapshot of the count of Jobs and their status' in the Pool.
+// PoolJobsStatus is a snapshot of the count of jobs grouped by status in the pool.
 type PoolJobsStatus struct {
 	Executing int
 	Failed    int
@@ -62,21 +62,23 @@ type PoolJobsStatus struct {
 	Queued    int
 }
 
-// PoolWorkersStatus is a snapshot of the count of workers in the Pool.
+// PoolWorkersStatus is a snapshot of the count of workers in the pool.
 type PoolWorkersStatus struct {
-	// Active is the number of active and valid workers that are executing or ready to execute a Job.
+	// Active is the number of active and valid workers that are executing or ready to execute a job.
 	Active int
 	// Terminating is the number of workers waiting to be killed after they completed execution of their currently executing job.
-	// It is the difference between All and Active workers.
+	// It is the difference between all and active workers.
 	Terminating int
 	// All is number of all workers including valid and invalid workers.
 	All int
 }
 
-// PoolStatus is a snapshot of the state of a Pool.
+// PoolStatus is a snapshot of the state of a pool.
 type PoolStatus struct {
 	// Error is the string representation of the error present in the pool.
 	// May be nil if there is no error.
+	// *string is used because it's JSON friendly compared to marshalling arbitrary error interfaces.
+	// Use Pool.Error() to get the real error interface shown here.
 	Error *string
 
 	// Jobs
@@ -85,34 +87,38 @@ type PoolStatus struct {
 	// Workers
 	Workers PoolWorkersStatus
 
-	// Pool status
+	// Pool state
 	State PoolState
 }
 
-// JobStatus is a representation of a Job state in the Pool.
+// JobStatus is a representation of a job's state in the pool.
 type JobStatus struct {
 	t *opJob
 
+	// ID is the unique ID given to this job when it begins queuing.
 	ID string
 
+	// State is the current state of the job in the pool.
 	State ExecutionState
+
+	// Error is the error returned from execution (if any).
 	Error error
 
-	QueuedOn  *time.Time
-	StartedOn *time.Time
-	StoppedOn *time.Time
+	// Time at which the job changed state.
+	// nil if not set yet.
+	QueuedOn, StartedOn, StoppedOn *time.Time
 
-	QueuedDuration    *time.Duration
-	ExecutionDuration *time.Duration
+	// Duration of either queueing or execution.
+	// nil if not set yet.
+	QueuedDuration, ExecutionDuration *time.Duration
 }
 
-// Job returns the actual Job attached to this State.
+// Job returns the actual job attached to this state.
 func (s *JobStatus) Job() Job {
 	return s.t.Job
 }
 
-// Context returns the execution context attached to this job state (if available).
-// May be nil if not set.
+// Context returns the execution context attached to this job state.
 func (s *JobStatus) Context() context.Context {
 	return s.t.Context
 }

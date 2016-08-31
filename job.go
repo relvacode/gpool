@@ -5,17 +5,17 @@ import (
 	"fmt"
 )
 
-// Hook is a function to be called when a Job changes state.
-// The contents of a Hook function should NOT perform any requests against the Pool
-// as a Hook is called from inside a bus cycle, there is no listener for additional requests in this period which will cause a deadlock.
-// Hook functions should be quick as calling a Hook blocks further processing of the pool.
+// Hook is a function to be called when a job changes state.
+// Hooks are always called synchronously.
+// There is no listener for additional pool requests in this period which will cause a deadlock if attempted.
+// Hook functions should be quick as calling a hook blocks further processing of the pool.
 type Hook func(*JobStatus)
 
-// JobFn is a function that is executed as a pool Job.
+// JobFn is a function that is executed as a pool job.
 type JobFn func(context.Context) error
 
-// NewJob wraps a Header and JobFn to implement a Job.
-// AbortFn is optional and is a function to be called if the Job is aborted before it can be started.
+// NewJob wraps a Header and a run and abort function to implement a job.
+// AbortFn is optional and is a function to be called if the job is aborted before it can be started.
 func NewJob(Header fmt.Stringer, RunFn JobFn, AbortFn func()) Job {
 	return &job{
 		h:   Header,
@@ -24,19 +24,17 @@ func NewJob(Header fmt.Stringer, RunFn JobFn, AbortFn func()) Job {
 	}
 }
 
-// A Job is an interface that implements methods for execution on a pool
+// A Job is an interface that implements methods for execution on a pool.
 type Job interface {
-	// An identity header that implements String()
+	// An identity header that implements String().
 	Header() fmt.Stringer
 
-	// Run the Job.
-	// If propagation is enabled on the Pool then the error returned it is propagated up and the Pool is killed.
+	// Run the job with the given context.
+	// The context contains the JobIDKey attached to the state of this job.
 	Run(context.Context) error
 
-	// Abort is used for when a Job is in the queue and needs to be removed (via call to Pool.Kill() for example).
-	// Abort is never called if the Job is already in a starting state, if it is then the Cancel channel of the
-	// WorkContext is used instead.
-	// Abort is called before the requesting ticket (Pool.Execute, Pool.Submit) is signalled.
+	// Abort is used for when a job is in the queue and needs to be removed (via call to Pool.Kill() for example).
+	// Abort is never called if the job is already in an executing state, if it is then the context is cancelled instead.
 	Abort()
 }
 

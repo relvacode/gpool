@@ -63,6 +63,17 @@ func NewPool(Workers int, Propagate bool, Scheduler Scheduler) *Pool {
 	}
 }
 
+func (p *Pool) newRequest(j Job, when Condition, ctx context.Context) *Request {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &Request{
+		Job:               j,
+		CallbackCondition: when,
+		Context:           context.WithValue(ctx, PoolKey, p),
+	}
+}
+
 // ack sends the operation to the pool op queue then waits for the response.
 func (p *Pool) ack(t operation) error {
 	p.pool.opIN <- t
@@ -70,7 +81,10 @@ func (p *Pool) ack(t operation) error {
 }
 
 func (p *Pool) push(j Job, when Condition, ctx context.Context) chan error {
-	t := &opJob{op: newOP(), Request: &Request{Job: j, CallbackCondition: when, Context: ctx}}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	t := &opJob{op: newOP(), Request: p.newRequest(j, when, ctx)}
 	p.opIN <- t
 	return t.Receive()
 }
@@ -138,7 +152,7 @@ func (p *Pool) QueueBatch(ctx context.Context, jobs []Job) error {
 	if len(jobs) > 0 {
 		requests := []*Request{}
 		for _, j := range jobs {
-			requests = append(requests, &Request{Job: j, Context: ctx})
+			requests = append(requests, p.newRequest(j, ConditionNow, ctx))
 		}
 		return p.ack(&opJobBatch{op: newOP(), requests: requests})
 	}

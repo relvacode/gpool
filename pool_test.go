@@ -54,7 +54,7 @@ func TestPool_Destroy(t *testing.T) {
 	}
 }
 
-func TestPool_ContextValue(t *testing.T) {
+func TestPool_ContextValue_JobID(t *testing.T) {
 	p := NewPool(1, false, nil)
 	defer p.Destroy()
 
@@ -76,6 +76,26 @@ func TestPool_ContextValue(t *testing.T) {
 		t.Fatal("value is not string")
 	} else if str != "value" {
 		t.Fatal("expected 'value', got ", str)
+	}
+}
+
+func TestPool_ContextValue_Pool(t *testing.T) {
+	p := NewPool(1, false, nil)
+	defer p.Destroy()
+
+	var ctxPool *Pool
+	p.Execute(context.Background(), NewJob(Header("test"), func(ctx context.Context) error {
+		ctxPool, _ = PoolFromContext(ctx)
+		// Make a request to the pool
+		ctxPool.Status()
+		return nil
+	}, nil))
+
+	if ctxPool == nil {
+		t.Fatal("pool not set in context")
+	}
+	if p != ctxPool {
+		t.Fatal("given pool is not the same")
 	}
 }
 

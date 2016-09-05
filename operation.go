@@ -27,8 +27,9 @@ const (
 type Request struct {
 	// Job is the job to be executed.
 	Job Job
-	// Context may be optionally supplied to provide values to the Job.
-	// A context's Done method is only evaluated during execution of the Job.
+	// Context to use with execution of the job.
+	// This context is extended with a CancelContext for use with job cancellation during execution.
+	// Context may not be nil. Instead context.Background() should be used if no specific context is required.
 	Context context.Context
 	// CallbackCondition describes when the ticket requesting this Job is acknowledged.
 	// Defaults to ConditionNow (callback on Queue).
@@ -101,9 +102,7 @@ func (t *opJob) Do(p *pool) error {
 	if u == "" {
 		return errors.New("unable to generate uuid")
 	}
-	if t.Context == nil {
-		t.Context = context.Background()
-	}
+	// Set JobID
 	t.Context = context.WithValue(t.Context, JobIDKey, u)
 	s := &JobStatus{
 		ID:    u,

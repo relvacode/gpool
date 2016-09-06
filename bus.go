@@ -1,6 +1,7 @@
 package gpool
 
 import (
+	"context"
 	"reflect"
 	"time"
 )
@@ -10,6 +11,19 @@ const (
 	intentClose
 	intentKill
 )
+
+func newCancellationContext(ctx context.Context) *cancellationContext {
+	c, x := context.WithCancel(ctx)
+	return &cancellationContext{
+		ctx:    c,
+		cancel: x,
+	}
+}
+
+type cancellationContext struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
 
 func newPool(target int, propagate bool, scheduler Scheduler) *pool {
 	if scheduler == nil {
@@ -22,6 +36,7 @@ func newPool(target int, propagate bool, scheduler Scheduler) *pool {
 		wOUT:       make(chan *JobStatus),
 		wEXIT:      make(chan int),
 		tickets:    make(map[Condition][]operation),
+		contexts:   make(map[string]*cancellationContext),
 		propagate:  propagate,
 		scheduler:  scheduler,
 	}
@@ -58,7 +73,11 @@ type pool struct {
 	state  PoolState // Current pool state
 	intent int       // Pool status intent for next cycle
 
+	// Pending tickets awaiting acknowledgement based on condition
 	tickets map[Condition][]operation
+
+	// Currently executing cancellation contexts
+	contexts map[string]*cancellationContext
 
 	scheduler Scheduler
 	propagate bool // Propagate job errors
@@ -301,6 +320,13 @@ cycle:
 			}
 		case 1: // Job finished
 			j := inf.Interface().(*JobStatus)
+
+			// Cancel and delete executing context
+			if cCtx, ok := p.contexts[j.ID]; ok {
+				cCtx.cancel()
+				delete(p.contexts, j.ID)
+			}
+
 			p.putStopState(j)
 		case 2: // Worker finished
 			id := inf.Interface().(int)
@@ -327,7 +353,12 @@ cycle:
 
 			// Valid job received from scheduler
 			if j != nil {
+				cCtx := newCancellationContext(j.t.Context)
+				j.t.Context = cCtx.ctx
+				p.contexts[j.ID] = cCtx
+
 				p.putStartState(j)
+
 				wkr.Response <- j
 				continue
 			} else {

@@ -30,6 +30,9 @@ var ErrKilled = errors.New("pool killed by signal")
 // ErrWorkerCount indicates that a request to modify worker size is invalid.
 var ErrWorkerCount = errors.New("invalid worker count request")
 
+// ErrNotExists indicates that a cancellation request was made to a Job that does not exist in the pool.
+var ErrNotExists = errors.New("job does not exist in the pool")
+
 // DefaultScheduler is the Scheduler used by the Pool if one was not provided.
 var DefaultScheduler = FIFOScheduler{}
 
@@ -126,6 +129,14 @@ func (p *Pool) WaitAsync() chan error {
 // If the pool state is Done, Wait() is resolved instantly.
 func (p *Pool) Wait() error {
 	return <-p.WaitAsync()
+}
+
+// Cancel tries to cancel a job in the pool by first checking to see if the job exists in the pool queue.
+// If it does then call Abort() and delete that job from the pool.
+// If it does not exist then check the currently executing jobs, if the job is currently executing then cancel the context.
+// If the job does not exist (or had already been cancelled) then 'ErrorNotExist' is returned.
+func (p *Pool) Cancel(ID string) error {
+	return p.ack(&opCancel{op: newOP(), ID: ID})
 }
 
 // RequestAsync performs the same function as request but returns an asynchronous channel.

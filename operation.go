@@ -118,6 +118,30 @@ func (t *opJob) Do(p *pool) error {
 	return nil
 }
 
+// opCancel cancels a running pool job
+type opCancel struct {
+	*op
+	ID string
+}
+
+func (t *opCancel) Do(p *pool) error {
+	// First check the pool queue, if it exists then abort and cut from queue
+	for idx, j := range p.jQ {
+		if j.ID == t.ID {
+			j.Job().Abort()
+			p.jQ = p.jQ[:idx+copy(p.jQ[idx:], p.jQ[idx+1:])]
+			return nil
+		}
+	}
+	// If not in the queue then check currently active
+	if cCtx, ok := p.contexts[t.ID]; ok {
+		cCtx.cancel()
+		delete(p.contexts, t.ID)
+		return nil
+	}
+	return ErrNotExists
+}
+
 // opJobBatch queues one or more jobs at the same time.
 type opJobBatch struct {
 	*op

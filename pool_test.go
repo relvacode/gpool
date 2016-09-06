@@ -123,6 +123,36 @@ func TestPool_ContextCancel(t *testing.T) {
 	}
 }
 
+func TestPool_Cancel(t *testing.T) {
+	p := NewPool(1, false, nil)
+	defer p.Destroy()
+
+	idCh := make(chan string)
+
+	j := NewJob(Header("cancel"), func(ctx context.Context) error {
+		jID, _ := JobIDFromContext(ctx)
+		idCh <- jID
+		<-ctx.Done()
+		return ctx.Err()
+	}, nil)
+
+	p.Start(context.Background(), j)
+	p.Close()
+	jID := <-idCh
+	t.Log("cancelling ", jID)
+
+	if err := p.Cancel(jID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.WaitAsync():
+		return
+	case <-time.After(time.Second):
+		t.Fatal("job not cancelled")
+	}
+
+}
+
 func TestPool_Error(t *testing.T) {
 	p := NewPool(1, true, nil)
 	defer p.Destroy()

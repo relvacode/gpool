@@ -303,7 +303,7 @@ cycle:
 					cases[3] = workInputReceiver
 				} else {
 					waitFor := nextEvaluation.Sub(now)
-					cases[3] = selectRecv(time.NewTimer(waitFor))
+					cases[3] = selectRecv(time.NewTimer(waitFor).C)
 				}
 
 			}

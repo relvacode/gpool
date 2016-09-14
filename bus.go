@@ -183,14 +183,33 @@ func (p *pool) resolveWorkers(target int) {
 	}
 }
 
+func (p *pool) abortState(err error, js *JobStatus) {
+	if err == nil {
+		err = ErrCancelled
+	}
+
+	js.Job().Abort(err)
+
+	js.Error = err
+	js.State = Failed
+
+	d := time.Since(*js.QueuedOn)
+	js.QueuedDuration = &d
+
+	if p.Hook.Stop != nil {
+		p.Hook.Stop(js)
+	}
+
+	// Do not respond if condition is now (on queue).
+	if js.t.Condition() != ConditionNow {
+		js.t.Acknowledge(err)
+	}
+}
+
 // clearQ iterates through the pending send queue and clears all requests by acknowledging them with the given error.
 func (p *pool) abortQueue(err error) {
-	for _, jr := range p.jQ {
-		jr.Job().Abort()
-		// Do not respond if condition is now (on queue).
-		if jr.t.Condition() != ConditionNow {
-			jr.t.Acknowledge(err)
-		}
+	for _, js := range p.jQ {
+		p.abortState(err, js)
 	}
 	p.jQ = p.jQ[:0]
 }

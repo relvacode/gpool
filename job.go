@@ -17,7 +17,7 @@ type JobFn func(context.Context) error
 
 // NewJob wraps a Header and a run and abort function to implement a job.
 // AbortFn is optional and is a function to be called if the job is aborted before it can be started.
-func NewJob(Header fmt.Stringer, RunFn JobFn, AbortFn func()) Job {
+func NewJob(Header fmt.Stringer, RunFn JobFn, AbortFn func(error)) Job {
 	return &job{
 		h:   Header,
 		rFn: RunFn,
@@ -36,12 +36,13 @@ type Job interface {
 
 	// Abort is used for when a job is in the queue and needs to be removed (via call to Pool.Kill() for example).
 	// Abort is never called if the job is already in an executing state, if it is then the context is cancelled instead.
-	Abort()
+	// The reason for abortion is given in the non-nil error provided.
+	Abort(error)
 }
 
 type job struct {
 	rFn JobFn
-	aFn func()
+	aFn func(error)
 	h   fmt.Stringer
 }
 
@@ -49,9 +50,9 @@ func (j *job) Header() fmt.Stringer {
 	return j.h
 }
 
-func (j *job) Abort() {
+func (j *job) Abort(err error) {
 	if j.aFn != nil {
-		j.aFn()
+		j.aFn(err)
 	}
 }
 

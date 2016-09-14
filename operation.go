@@ -128,7 +128,7 @@ func (t *opCancel) Do(p *pool) error {
 	// First check the pool queue, if it exists then abort and cut from queue
 	for idx, j := range p.jQ {
 		if j.ID == t.ID {
-			j.Job().Abort()
+			p.abortState(ErrCancelled, j)
 			p.jQ = p.jQ[:idx+copy(p.jQ[idx:], p.jQ[idx+1:])]
 			return nil
 		}

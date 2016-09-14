@@ -33,6 +33,9 @@ var ErrWorkerCount = errors.New("invalid worker count request")
 // ErrNotExists indicates that a cancellation request was made to a Job that does not exist in the pool.
 var ErrNotExists = errors.New("job does not exist in the pool")
 
+// ErrCancelled indicates that the job was cancelled.
+var ErrCancelled = errors.New("cancelled by request")
+
 // DefaultScheduler is the Scheduler used by the Pool if one was not provided.
 var DefaultScheduler = FIFOScheduler{}
 

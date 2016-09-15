@@ -30,7 +30,7 @@ func (j orderedJob) Header() fmt.Stringer {
 	return orderedJobHeader{i: j.i}
 }
 
-func (orderedJob) Abort() {}
+func (orderedJob) Abort(error) {}
 
 func (orderedJob) Run(context.Context) error {
 	time.Sleep(time.Millisecond)

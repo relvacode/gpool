@@ -21,7 +21,7 @@ func (j *testingJob) Header() fmt.Stringer {
 	return Header(j.name)
 }
 
-func (j *testingJob) Abort() {
+func (j *testingJob) Abort(err error) {
 	j.aborted = true
 }
 

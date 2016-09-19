@@ -2,7 +2,6 @@ package gpool
 
 import (
 	"context"
-	"reflect"
 	"time"
 )
 
@@ -237,11 +236,10 @@ func (p *pool) schedule() (j *JobStatus, next time.Duration) {
 		j = p.jQ[idx]
 		p.jQ = p.jQ[:idx+copy(p.jQ[idx:], p.jQ[idx+1:])]
 	}
-	return
-}
 
-func selectRecv(v interface{}) reflect.SelectCase {
-	return reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(v)}
+	p.scheduler.Load(j)
+
+	return
 }
 
 // bus is the central communication bus for the pool.
@@ -249,11 +247,9 @@ func selectRecv(v interface{}) reflect.SelectCase {
 // If the ticket is a tReqWait request they are added to the slice of pending tickets and upon pool closure.
 // A central bus is used to prevent concurrent access to any property of the pool.
 func (p *pool) bus() {
-	nextEvaluation := time.Now()
-
-	workInputReceiver := selectRecv(p.wIN)
-	nilInputReceiver := selectRecv(nil)
-	cases := []reflect.SelectCase{selectRecv(p.opIN), selectRecv(p.wOUT), selectRecv(p.wEXIT), workInputReceiver}
+	// scheduleReady indicates that there is no active evaluation timeout.
+	var scheduleReady = true
+	var evaluationTimer <-chan time.Time
 
 cycle:
 	for {
@@ -312,62 +308,37 @@ cycle:
 			}
 		}
 
-		// Only receive message if we have a Job to send or if pool state is not OK.
-		if len(p.jQ) > 0 && p.state == OK {
-			if nextEvaluation.IsZero() {
-				cases[3] = workInputReceiver
-			} else {
-				now := time.Now()
-				if now.After(nextEvaluation) {
-					cases[3] = workInputReceiver
-				} else {
-					waitFor := nextEvaluation.Sub(now)
-					cases[3] = selectRecv(time.NewTimer(waitFor).C)
-				}
+		var workInputReceiver chan *workRequestPacket
 
-			}
-		} else {
-			cases[3] = nilInputReceiver
+		// Only set workInputReceiver if ready to execute another job
+		if len(p.jQ) > 0 && p.state == OK && scheduleReady {
+			workInputReceiver = p.wIN
 		}
 
-		selected, inf, _ := reflect.Select(cases)
-		switch selected {
-		case 0: // Ticket request
-			t := inf.Interface().(operation)
-			if err := t.Do(p); err != nil || t.Condition() == ConditionNow {
-				t.Acknowledge(err)
+		select {
+		case op := <-p.opIN:
+			if err := op.Do(p); err != nil || op.Condition() == ConditionNow {
+				op.Acknowledge(err)
 			}
-		case 1: // Job finished
-			j := inf.Interface().(*JobStatus)
-
+		case j := <-p.wOUT:
 			// Cancel and delete executing context
 			if cCtx, ok := p.contexts[j.ID]; ok {
 				cCtx.cancel()
 				delete(p.contexts, j.ID)
 			}
-
 			p.putStopState(j)
-		case 2: // Worker finished
-			id := inf.Interface().(int)
+		case id := <-p.wEXIT:
 			delete(p.actWorkers, id)
 			p.wkCur--
-			// If no more workers then stop listening for worker done messages
 			if p.wkCur == 0 {
 				p.state = Done
-				cases[2] = selectRecv(nil)
 			}
-		case 3: // Worker Job request
-			wkr, isRequest := inf.Interface().(*workRequestPacket)
-			if !isRequest {
-				// Evaluation timer timeout
-				nextEvaluation = time.Time{}
-				continue
-			}
+		case req := <-workInputReceiver:
+			// request for work from worker
 			j, next := p.schedule()
 			if next > 0 {
-				nextEvaluation = time.Now().Add(next)
-			} else if !nextEvaluation.IsZero() {
-				nextEvaluation = time.Time{}
+				scheduleReady = false
+				evaluationTimer = time.NewTimer(next).C
 			}
 
 			// Valid job received from scheduler
@@ -378,12 +349,15 @@ cycle:
 
 				p.putStartState(j)
 
-				wkr.Response <- j
+				req.Response <- j
 				continue
 			} else {
-				wkr.Response <- nil
+				req.Response <- nil
 			}
-
+		case <-evaluationTimer:
+			// timeout from last evaluation
+			evaluationTimer = nil
+			scheduleReady = true
 		}
 	}
 }

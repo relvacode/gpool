@@ -109,6 +109,12 @@ func (t *opJob) Do(p *pool) error {
 		t:     t,
 		State: Queued,
 	}
+
+	// Preload this job in the scheduler
+	if err := p.scheduler.Preload(s); err != nil {
+		return err
+	}
+
 	now := time.Now()
 	s.QueuedOn = &now
 	p.jQ = append(p.jQ, s)

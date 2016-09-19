@@ -3,6 +3,7 @@ package gpool
 import (
 	"context"
 	"fmt"
+	"github.com/pkg/errors"
 	"strconv"
 	"testing"
 	"time"
@@ -87,5 +88,55 @@ func TestLIFOScheduler_Evaluate(t *testing.T) {
 	}
 	if order[0] != 10 {
 		t.Fatal("expected first id to be 10, got ", order[0])
+	}
+}
+
+var errPreload = errors.New("preload denied")
+
+type testPreloadScheduler struct {
+	FIFOScheduler
+}
+
+func (testPreloadScheduler) Preload(*JobStatus) error {
+	return errPreload
+}
+
+func TestSchedulerPreload(t *testing.T) {
+	p := NewPool(1, true, testPreloadScheduler{})
+	defer p.Destroy()
+
+	err := p.Queue(context.Background(), NewJob(Header("test"), func(context.Context) error {
+		return nil
+	}, nil))
+	if err == nil {
+		t.Fatal("expected error but got nil")
+	}
+	if err != errPreload {
+		t.Fatalf("expected %s, got %s", errPreload, err)
+	}
+}
+
+type testTimeoutScheduler struct {
+	NoOpSchedulerBase
+}
+
+func (testTimeoutScheduler) Evaluate(jobs []*JobStatus) (int, time.Duration, bool) {
+	return 0, time.Second, true
+}
+
+func TestSchedulerEvaluateTimeout(t *testing.T) {
+	t.Parallel()
+	p := NewPool(1, false, testTimeoutScheduler{})
+	defer p.Destroy()
+
+	j := NewJob(Header("test"), func(context.Context) error {
+		return nil
+	}, nil)
+
+	p.Start(context.Background(), j)
+	s := time.Now()
+	p.Start(context.Background(), j)
+	if time.Since(s) < time.Millisecond {
+		t.Fatal("job was started instantly")
 	}
 }

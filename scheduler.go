@@ -19,6 +19,9 @@ type Scheduler interface {
 	Load(*JobStatus)
 
 	// Unload unloads a job from the scheduler when the job stops regardless of reason.
+	// Unload may be called if a job is cancelled whilst in queue, for which a call to Load has not occurred yet.
+	// The implementer should check the state of the job to determine at which point the job is being unloaded on.
+	// A state of Queued means the job was aborted in queue.
 	Unload(*JobStatus)
 }
 

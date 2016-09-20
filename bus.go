@@ -64,9 +64,9 @@ type pool struct {
 	err error
 
 	Hook struct {
-		Queue Hook // Job becomes queued
-		Start Hook // Job starts
-		Stop  Hook // Job stops
+		Queue Hook // Job becomes queued.
+		Start Hook // Job starts.
+		Stop  Hook // Job stops or is aborted in queue.
 	}
 
 	state  PoolState // Current pool state
@@ -91,6 +91,8 @@ func (p *pool) putStartState(js *JobStatus) {
 	qd := t.Sub(*js.QueuedOn)
 	js.QueuedDuration = &qd
 
+	p.scheduler.Load(js)
+
 	if p.Hook.Start != nil {
 		p.Hook.Start(js)
 	}
@@ -100,7 +102,6 @@ func (p *pool) putStartState(js *JobStatus) {
 }
 
 func (p *pool) putStopState(js *JobStatus) {
-	p.scheduler.Unload(js)
 	p.jcExecuting--
 	if js.Error != nil {
 		p.jcFailed++
@@ -121,6 +122,9 @@ func (p *pool) putStopState(js *JobStatus) {
 			p.intent = intentKill
 		}
 	}
+
+	p.scheduler.Unload(js)
+
 	if p.Hook.Stop != nil {
 		p.Hook.Stop(js)
 	}
@@ -236,8 +240,6 @@ func (p *pool) schedule() (j *JobStatus, next time.Duration) {
 		j = p.jQ[idx]
 		p.jQ = p.jQ[:idx+copy(p.jQ[idx:], p.jQ[idx+1:])]
 	}
-
-	p.scheduler.Load(j)
 
 	return
 }

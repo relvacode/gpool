@@ -199,6 +199,8 @@ func (p *pool) abortState(err error, js *JobStatus) {
 	d := time.Since(*js.QueuedOn)
 	js.QueuedDuration = &d
 
+	p.scheduler.Unload(js)
+
 	if p.Hook.Stop != nil {
 		p.Hook.Stop(js)
 	}

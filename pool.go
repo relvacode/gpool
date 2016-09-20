@@ -52,7 +52,7 @@ type Pool struct {
 // The number of workers must be more than 0.
 // If propagate is true then if a Job returns an error during execution then that error is propagated to the pool,
 // during which all remaining jobs are cancelled and all queued jobs have Abort() called on them.
-func NewPool(Workers int, Propagate bool) *Pool {
+func NewPool(Workers uint, Propagate bool) *Pool {
 	if Workers == 0 {
 		panic("need at least one worker")
 	}

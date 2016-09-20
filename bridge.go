@@ -18,7 +18,10 @@ type Bridge interface {
 	Close() <-chan struct{}
 }
 
-func NewStaticBridge(N int) *StaticBridge {
+func NewStaticBridge(N uint) *StaticBridge {
+	if N == 0 {
+		N = 1
+	}
 	br := &StaticBridge{
 		n:    N,
 		req:  make(chan chan<- *JobStatus),
@@ -32,7 +35,7 @@ func NewStaticBridge(N int) *StaticBridge {
 
 // A StaticBridge is a bridge with a set amount of concurrent workers.
 type StaticBridge struct {
-	n int
+	n uint
 
 	req  chan chan<- *JobStatus
 	resp chan *JobStatus
@@ -56,7 +59,7 @@ func (br *StaticBridge) Close() <-chan struct{} {
 	ack := make(chan struct{})
 	go func() {
 		close(br.done)
-		for i := 0; i < br.n; i++ {
+		for i := uint(0); i < br.n; i++ {
 			<-br.exit
 		}
 		close(ack)
@@ -82,7 +85,7 @@ func (br *StaticBridge) work() {
 }
 
 func (br *StaticBridge) start() {
-	for i := 0; i < br.n; i++ {
+	for i := uint(0); i < br.n; i++ {
 		go br.work()
 	}
 }

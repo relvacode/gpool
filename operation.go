@@ -54,7 +54,7 @@ func data(err error) (interface{}, bool) {
 // When a operation is called it has exclusive access to the pool.
 type operation interface {
 	// Do performs and action on the pool, returning any error in execution.
-	Do(*pool) error
+	Do(*bus) error
 	// Condition returns what condition the ticket should be responded to (if err is not nil).
 	Condition() Condition
 	// Acknowledge responds to the caller of the ticket with the supplied error.
@@ -94,7 +94,7 @@ func (t *opJob) Condition() Condition {
 	return t.CallbackCondition
 }
 
-func (t *opJob) Do(p *pool) error {
+func (t *opJob) Do(p *bus) error {
 	if p.state > OK {
 		return ErrClosedPool
 	}
@@ -130,7 +130,7 @@ type opCancel struct {
 	ID string
 }
 
-func (t *opCancel) Do(p *pool) error {
+func (t *opCancel) Do(p *bus) error {
 	// First check the pool queue, if it exists then abort and cut from queue
 	for idx, j := range p.jQ {
 		if j.ID == t.ID {
@@ -140,9 +140,9 @@ func (t *opCancel) Do(p *pool) error {
 		}
 	}
 	// If not in the queue then check currently active
-	if cCtx, ok := p.contexts[t.ID]; ok {
-		cCtx.cancel()
-		delete(p.contexts, t.ID)
+	if cancel, ok := p.cancellations[t.ID]; ok {
+		cancel()
+		delete(p.cancellations, t.ID)
 		return nil
 	}
 	return ErrNotExists
@@ -154,7 +154,7 @@ type opJobBatch struct {
 	requests []*Request
 }
 
-func (t *opJobBatch) Do(p *pool) error {
+func (t *opJobBatch) Do(p *bus) error {
 	if p.state > OK {
 		return ErrClosedPool
 	}
@@ -173,33 +173,13 @@ type opSetIntent struct {
 	intent int
 }
 
-func (t *opSetIntent) Do(p *pool) error {
+func (t *opSetIntent) Do(p *bus) error {
 	if p.state > OK {
 		return ErrClosedPool
 	}
 	if p.state == OK && p.intent < t.intent {
 		p.intent = t.intent
 	}
-	return nil
-}
-
-// opResize alters the amount of executing workers in the pool
-type opResize struct {
-	*op
-	target, alter int
-}
-
-func (t *opResize) Do(p *pool) error {
-	if p.state != OK {
-		return ErrClosedPool
-	}
-	if t.alter != 0 {
-		t.target = adjust(p.wkCur, t.alter)
-	}
-	if t.target == 0 {
-		return ErrWorkerCount
-	}
-	p.resolveWorkers(t.target)
 	return nil
 }
 
@@ -213,7 +193,7 @@ func (t *opAcknowledgeCondition) Condition() Condition {
 	return t.when
 }
 
-func (t *opAcknowledgeCondition) Do(p *pool) error {
+func (t *opAcknowledgeCondition) Do(p *bus) error {
 	if t.when == conditionDestroyRelease {
 		p.intent = intentClose
 	}
@@ -234,7 +214,7 @@ type opGetError struct {
 	*op
 }
 
-func (t *opGetError) Do(p *pool) error {
+func (t *opGetError) Do(p *bus) error {
 	return p.err
 }
 
@@ -243,7 +223,7 @@ type opGetState struct {
 	*op
 }
 
-func (t *opGetState) Do(p *pool) error {
+func (t *opGetState) Do(p *bus) error {
 	return &payload{data: p.stat()}
 }
 

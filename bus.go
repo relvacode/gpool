@@ -11,53 +11,28 @@ const (
 	intentKill
 )
 
-func newCancellationContext(ctx context.Context) *cancellationContext {
-	c, x := context.WithCancel(ctx)
-	return &cancellationContext{
-		ctx:    c,
-		cancel: x,
+func newBus(propagate bool, scheduler Scheduler, bridge Bridge) *bus {
+	p := &bus{
+		opIN:          make(chan operation),
+		tickets:       make(map[Condition][]operation),
+		cancellations: make(map[string]context.CancelFunc),
+		propagate:     propagate,
+		bridge:        bridge,
+		scheduler:     scheduler,
 	}
-}
-
-type cancellationContext struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-}
-
-func newPool(target int, propagate bool, scheduler Scheduler) *pool {
-	if scheduler == nil {
-		scheduler = DefaultScheduler
-	}
-	p := &pool{
-		actWorkers: make(map[int]*worker),
-		opIN:       make(chan operation),
-		wIN:        make(chan *workRequestPacket),
-		wOUT:       make(chan *JobStatus),
-		wEXIT:      make(chan int),
-		tickets:    make(map[Condition][]operation),
-		contexts:   make(map[string]*cancellationContext),
-		propagate:  propagate,
-		scheduler:  scheduler,
-	}
-	p.resolveWorkers(target)
 	go p.bus()
 	return p
 }
 
-type pool struct {
-	jQ []*JobStatus // Job queue
+type bus struct {
+	bridge    Bridge
+	scheduler Scheduler
 
-	actWorkers map[int]*worker
-	wkCur      int
-	wkID       int
+	jQ []*JobStatus // Job queue
 
 	jcExecuting int
 	jcFailed    int
 	jcFinished  int
-
-	wIN   chan *workRequestPacket
-	wOUT  chan *JobStatus // Return
-	wEXIT chan int        // Worker done signal
 
 	opIN chan operation // Frontend ticket requests
 
@@ -68,21 +43,19 @@ type pool struct {
 		Start Hook // Job starts.
 		Stop  Hook // Job stops or is aborted in queue.
 	}
+	propagate bool // Propagate job errors
 
-	state  PoolState // Current pool state
-	intent int       // Pool status intent for next cycle
+	state  PoolState // Current bus state
+	intent int       // Bus intent for next cycle
 
 	// Pending tickets awaiting acknowledgement based on condition
 	tickets map[Condition][]operation
 
 	// Currently executing cancellation contexts
-	contexts map[string]*cancellationContext
-
-	scheduler Scheduler
-	propagate bool // Propagate job errors
+	cancellations map[string]context.CancelFunc
 }
 
-func (p *pool) putStartState(js *JobStatus) {
+func (p *bus) putStartState(js *JobStatus) {
 	p.jcExecuting++
 	js.State = Executing
 	t := time.Now()
@@ -101,7 +74,7 @@ func (p *pool) putStartState(js *JobStatus) {
 	}
 }
 
-func (p *pool) putStopState(js *JobStatus) {
+func (p *bus) putStopState(js *JobStatus) {
 	p.jcExecuting--
 	if js.Error != nil {
 		p.jcFailed++
@@ -133,7 +106,7 @@ func (p *pool) putStopState(js *JobStatus) {
 	}
 }
 
-func (p *pool) stat() *PoolStatus {
+func (p *bus) stat() *PoolStatus {
 	var err *string
 	if p.err != nil {
 		s := p.err.Error()
@@ -147,50 +120,14 @@ func (p *pool) stat() *PoolStatus {
 			Finished:  p.jcFinished,
 			Queued:    len(p.jQ),
 		},
-		Workers: PoolWorkersStatus{
-			Active:      len(p.actWorkers),
-			All:         p.wkCur,
-			Terminating: p.wkCur - len(p.actWorkers),
-		},
-
 		State: p.state,
 	}
 }
 
-func (p *pool) resolveWorkers(target int) {
-	length := len(p.actWorkers)
-	if target == length {
-		return
-		// if we have too many workers then kill some off
-	} else if target < length {
-		var delta, i int = length - target, 0
-		for id, w := range p.actWorkers {
-			w.Signal <- sigterm
-			delete(p.actWorkers, id)
-			i++
-			if i == delta {
-				return
-			}
-		}
-		// otherwise start some up
-	} else {
-		for i := 0; i < target-length; i++ {
-			// create a worker
-			p.wkID++
-			p.wkCur++
-			id := p.wkID
-			w := newWorker(id, p.wIN, p.wOUT, p.wEXIT)
-			go w.Work()
-			p.actWorkers[id] = w
-		}
-	}
-}
-
-func (p *pool) abortState(err error, js *JobStatus) {
+func (p *bus) abortState(err error, js *JobStatus) {
 	if err == nil {
 		err = ErrCancelled
 	}
-
 	js.Job().Abort(err)
 
 	js.Error = err
@@ -211,15 +148,14 @@ func (p *pool) abortState(err error, js *JobStatus) {
 	}
 }
 
-// clearQ iterates through the pending send queue and clears all requests by acknowledging them with the given error.
-func (p *pool) abortQueue(err error) {
+func (p *bus) abortQueue(err error) {
 	for _, js := range p.jQ {
 		p.abortState(err, js)
 	}
 	p.jQ = p.jQ[:0]
 }
 
-func (p *pool) schedule() (j *JobStatus, next time.Duration) {
+func (p *bus) schedule() (j *JobStatus, next time.Duration) {
 	if len(p.jQ) == 0 {
 		return
 	}
@@ -246,14 +182,14 @@ func (p *pool) schedule() (j *JobStatus, next time.Duration) {
 	return
 }
 
-// bus is the central communication bus for the pool.
-// All pool inputs are collected here as tickets and then actioned on depending on the ticket type.
-// If the ticket is a tReqWait request they are added to the slice of pending tickets and upon pool closure.
-// A central bus is used to prevent concurrent access to any property of the pool.
-func (p *pool) bus() {
+func (p *bus) bus() {
 	// scheduleReady indicates that there is no active evaluation timeout.
 	var scheduleReady = true
 	var evaluationTimer <-chan time.Time
+
+	var bridgeExit <-chan struct{}
+
+	bridgeRequest, bridgeReturn := p.bridge.Request(), p.bridge.Return()
 
 cycle:
 	for {
@@ -268,13 +204,15 @@ cycle:
 				p.err = ErrKilled
 			}
 			if p.state < Closed {
+				bridgeExit = p.bridge.Close()
 				p.state = Closed
 			}
-			// Kill all workers
-			for idx, w := range p.actWorkers {
-				w.Signal <- sigkill
-				delete(p.actWorkers, idx)
+			// Cancel all running contexts
+			for id, c := range p.cancellations {
+				c()
+				delete(p.cancellations, id)
 			}
+
 			p.abortQueue(p.err)
 
 			p.state = Killed
@@ -287,11 +225,8 @@ cycle:
 				p.intent = intentNone
 				break
 			}
-			// Close remaining workers
-			for idx, w := range p.actWorkers {
-				w.Signal <- sigterm
-				delete(p.actWorkers, idx)
-			}
+			bridgeExit = p.bridge.Close()
+
 			p.state = Closed
 			p.intent = intentNone
 		}
@@ -312,11 +247,11 @@ cycle:
 			}
 		}
 
-		var workInputReceiver chan *workRequestPacket
+		var bridgeInput <-chan chan<- *JobStatus
 
 		// Only set workInputReceiver if ready to execute another job
 		if len(p.jQ) > 0 && p.state == OK && scheduleReady {
-			workInputReceiver = p.wIN
+			bridgeInput = bridgeRequest
 		}
 
 		select {
@@ -324,40 +259,28 @@ cycle:
 			if err := op.Do(p); err != nil || op.Condition() == ConditionNow {
 				op.Acknowledge(err)
 			}
-		case j := <-p.wOUT:
+		case j := <-bridgeReturn:
 			// Cancel and delete executing context
-			if cCtx, ok := p.contexts[j.ID]; ok {
-				cCtx.cancel()
-				delete(p.contexts, j.ID)
+			if cancel, ok := p.cancellations[j.ID]; ok {
+				cancel()
+				delete(p.cancellations, j.ID)
 			}
 			p.putStopState(j)
-		case id := <-p.wEXIT:
-			delete(p.actWorkers, id)
-			p.wkCur--
-			if p.wkCur == 0 {
-				p.state = Done
-			}
-		case req := <-workInputReceiver:
+		case <-bridgeExit:
+			p.state = Done
+		case req := <-bridgeInput:
 			// request for work from worker
 			j, next := p.schedule()
 			if next > 0 {
 				scheduleReady = false
 				evaluationTimer = time.NewTimer(next).C
 			}
-
-			// Valid job received from scheduler
 			if j != nil {
-				cCtx := newCancellationContext(j.t.Context)
-				j.t.Context = cCtx.ctx
-				p.contexts[j.ID] = cCtx
-
+				// Create cancellation context
+				j.t.Context, p.cancellations[j.ID] = context.WithCancel(j.t.Context)
 				p.putStartState(j)
-
-				req.Response <- j
-				continue
-			} else {
-				req.Response <- nil
 			}
+			req <- j
 		case <-evaluationTimer:
 			// timeout from last evaluation
 			evaluationTimer = nil

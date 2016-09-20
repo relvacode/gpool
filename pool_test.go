@@ -38,7 +38,7 @@ func (j *testingJob) Run(ctx context.Context) error {
 }
 
 func TestPool_Destroy(t *testing.T) {
-	p := NewPool(1, true, nil)
+	p := NewPool(1, true)
 	p.Destroy()
 
 	res := make(chan interface{})
@@ -55,7 +55,7 @@ func TestPool_Destroy(t *testing.T) {
 }
 
 func TestPool_ContextValue_JobID(t *testing.T) {
-	p := NewPool(1, false, nil)
+	p := NewPool(1, false)
 	defer p.Destroy()
 
 	var id string
@@ -80,7 +80,7 @@ func TestPool_ContextValue_JobID(t *testing.T) {
 }
 
 func TestPool_ContextValue_Pool(t *testing.T) {
-	p := NewPool(1, false, nil)
+	p := NewPool(1, false)
 	defer p.Destroy()
 
 	var ctxPool *Pool
@@ -101,7 +101,7 @@ func TestPool_ContextValue_Pool(t *testing.T) {
 
 func TestPool_ContextCancel(t *testing.T) {
 	t.Parallel()
-	p := NewPool(1, false, nil)
+	p := NewPool(1, false)
 	defer p.Destroy()
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -124,7 +124,7 @@ func TestPool_ContextCancel(t *testing.T) {
 }
 
 func TestPool_Cancel(t *testing.T) {
-	p := NewPool(1, false, nil)
+	p := NewPool(1, false)
 	defer p.Destroy()
 
 	idCh := make(chan string)
@@ -139,7 +139,6 @@ func TestPool_Cancel(t *testing.T) {
 	p.Start(context.Background(), j)
 	p.Close()
 	jID := <-idCh
-	t.Log("cancelling ", jID)
 
 	if err := p.Cancel(jID); err != nil {
 		t.Fatal(err)
@@ -154,7 +153,7 @@ func TestPool_Cancel(t *testing.T) {
 }
 
 func TestPool_Error(t *testing.T) {
-	p := NewPool(1, true, nil)
+	p := NewPool(1, true)
 	defer p.Destroy()
 
 	pErr := errors.New("testing error")
@@ -178,7 +177,7 @@ func TestPool_Error(t *testing.T) {
 }
 
 func TestPool_Execute_OK(t *testing.T) {
-	p := NewPool(1, true, nil)
+	p := NewPool(1, true)
 	defer p.Destroy()
 	j := &testingJob{
 		name: "TestPool_Execute_OK",
@@ -191,7 +190,7 @@ func TestPool_Execute_OK(t *testing.T) {
 }
 
 func TestPool_Execute_Error(t *testing.T) {
-	p := NewPool(1, true, nil)
+	p := NewPool(1, true)
 	defer p.Destroy()
 
 	mkErr := errors.New("execution error")
@@ -211,7 +210,7 @@ func TestPool_Execute_Error(t *testing.T) {
 }
 
 func TestPool_Status(t *testing.T) {
-	p := NewPool(1, true, nil)
+	p := NewPool(1, true)
 
 	ok := make(chan bool)
 
@@ -243,7 +242,7 @@ func TestPool_Status(t *testing.T) {
 }
 
 func TestPool_Wait(t *testing.T) {
-	p := NewPool(1, true, nil)
+	p := NewPool(1, true)
 	ok := make(chan bool)
 	go func() {
 		p.Wait()
@@ -256,7 +255,7 @@ func TestPool_Wait(t *testing.T) {
 }
 
 func TestPool_Hook(t *testing.T) {
-	p := NewPool(1, true, nil)
+	p := NewPool(1, true)
 	defer p.Destroy()
 
 	var queued, started, stopped bool
@@ -290,7 +289,7 @@ func TestPool_Hook(t *testing.T) {
 
 func TestPool_Load(t *testing.T) {
 	t.Parallel()
-	p := NewPool(5, true, nil)
+	p := NewPool(5, true)
 	defer p.Destroy()
 	for idx := range make([]int, 100000) {
 		p.ExecuteASync(nil, &testingJob{
@@ -306,7 +305,7 @@ func TestPool_Load(t *testing.T) {
 }
 
 func TestPool_Send_Concurrent(t *testing.T) {
-	p := NewPool(1, true, nil)
+	p := NewPool(1, true)
 	defer p.Destroy()
 	wg := &sync.WaitGroup{}
 	for range make([]int, 5000) {
@@ -335,7 +334,7 @@ func TestPool_Send_Concurrent(t *testing.T) {
 }
 
 func TestPool_Kill(t *testing.T) {
-	p := NewPool(1, true, nil)
+	p := NewPool(1, true)
 	defer p.Destroy()
 	cancelled := make(chan bool)
 	p.Start(nil, NewJob(Header("Testing"), func(ctx context.Context) error {
@@ -360,25 +359,9 @@ func TestPool_Kill(t *testing.T) {
 	}
 }
 
-func TestPool_Resize(t *testing.T) {
-	p := NewPool(1, true, nil)
-	defer p.Destroy()
-	p.Resize(10)
-	p.Resize(1)
-	p.Resize(10)
-	p.Resize(1)
-	p.Resize(10)
-	// Wait for pool to stabilise
-	time.Sleep(time.Millisecond)
-	s := p.Status()
-	if s.Workers.Active != 10 {
-		t.Fatal("expected 10 workers, got ", s.Workers.Active)
-	}
-}
-
 func Example() {
 	// Create a Pool with 5 workers and propagation enabled.
-	p := NewPool(5, true, FIFOScheduler{})
+	p := NewPool(5, true)
 
 	// Example JobFn.
 	// After 10 seconds the job will print 'Hello, World!' and exit unless the context is closed.
@@ -410,7 +393,7 @@ func Example() {
 }
 
 func BenchmarkPool_Execute(b *testing.B) {
-	p := NewPool(1, false, FIFOScheduler{})
+	p := NewPool(1, false)
 	defer p.Destroy()
 	b.ResetTimer()
 	j := &testingJob{

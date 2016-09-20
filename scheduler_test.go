@@ -39,7 +39,7 @@ func (orderedJob) Run(context.Context) error {
 }
 
 func testPoolSchedulingOrder(n int, scheduler Scheduler) []int {
-	p := NewPool(1, false, scheduler)
+	p := NewCustomPool(false, scheduler, NewStaticBridge(1))
 
 	IDs := []int{}
 	p.Hook.Stop = func(js *JobStatus) {
@@ -102,7 +102,7 @@ func (testPreloadScheduler) Preload(*JobStatus) error {
 }
 
 func TestSchedulerPreload(t *testing.T) {
-	p := NewPool(1, true, testPreloadScheduler{})
+	p := NewCustomPool(true, testPreloadScheduler{}, NewStaticBridge(1))
 	defer p.Destroy()
 
 	err := p.Queue(context.Background(), NewJob(Header("test"), func(context.Context) error {
@@ -126,7 +126,7 @@ func (testTimeoutScheduler) Evaluate(jobs []*JobStatus) (int, time.Duration, boo
 
 func TestSchedulerEvaluateTimeout(t *testing.T) {
 	t.Parallel()
-	p := NewPool(1, false, testTimeoutScheduler{})
+	p := NewCustomPool(false, testTimeoutScheduler{}, NewStaticBridge(1))
 	defer p.Destroy()
 
 	j := NewJob(Header("test"), func(context.Context) error {

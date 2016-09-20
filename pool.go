@@ -1,18 +1,14 @@
 // Package gpool is a utility for executing jobs in a pool of workers.
 //
 // A Pool consists of a central bus where input operations are called synchronously
-// and a pool of workers that execute jobs asynchronously.
+// and a bridge which executes jobs asynchronously.
 // When an input operation such as Close() or Queue() is called the operation is sent to the bus via a channel.
 //
 // The bus iterates on a for loop called a cycle, first processing any changes made by the last cycle and then blocks while waiting
-// for either an input operation or a request/response from a worker.
+// for either an input operation or a message from the bridge.
 //
-// When a worker is ready to begin executing a job and at least one job exists in the queue,
+// When the bridge signals it is ready to begin executing a job and at least one job exists in the queue,
 // a call to the pool's scheduler is made to locate the next job in the queue to be executed.
-// That job is sent to the worker where Run() is called on it.
-//
-// If the job returns a non-nil error and the pool doesn't already have an error and propagation is enabled
-// then the pool will be killed and the error of the pool set to the error returned by the job.
 package gpool
 
 import (
@@ -26,9 +22,6 @@ var ErrClosedPool = errors.New("send on closed pool")
 
 // ErrKilled indicates that the pool was killed by a call to Kill().
 var ErrKilled = errors.New("pool killed by signal")
-
-// ErrWorkerCount indicates that a request to modify worker size is invalid.
-var ErrWorkerCount = errors.New("invalid worker count request")
 
 // ErrNotExists indicates that a cancellation request was made to a Job that does not exist in the pool.
 var ErrNotExists = errors.New("job does not exist in the pool")
@@ -49,24 +42,44 @@ const AsSoonAsPossible = time.Duration(0)
 // Hook functions should be quick as calling a hook blocks further processing of the pool.
 type Hook func(*JobStatus)
 
-// Pool is the main pool struct containing a bus and workers.
+// Pool is the main pool struct containing a bus, scheduler and bridge.
 // Pool should always be invoked via NewPool().
 type Pool struct {
-	*pool
+	*bus
 }
 
 // NewPool returns a new pool with the supplied settings.
 // The number of workers must be more than 0.
 // If propagate is true then if a Job returns an error during execution then that error is propagated to the pool,
 // during which all remaining jobs are cancelled and all queued jobs have Abort() called on them.
-// An optional scheduler can be provided, if nil then 'DefaultScheduler' is used.
-func NewPool(Workers int, Propagate bool, Scheduler Scheduler) *Pool {
+func NewPool(Workers int, Propagate bool) *Pool {
 	if Workers == 0 {
 		panic("need at least one worker")
 	}
-	return &Pool{
-		newPool(Workers, Propagate, Scheduler),
+	return NewCustomPool(Propagate, DefaultScheduler, NewStaticBridge(Workers))
+}
+
+// NewCustomPool creates a new pool with a custom Scheduler and Bridge.
+func NewCustomPool(Propagate bool, Scheduler Scheduler, Bridge Bridge) *Pool {
+	if Scheduler == nil {
+		panic("a scheduler is required")
 	}
+	if Bridge == nil {
+		panic("a bridge is required")
+	}
+	return &Pool{
+		newBus(Propagate, Scheduler, Bridge),
+	}
+}
+
+// Scheduler returns the scheduler used by this pool.
+func (p *Pool) Scheduler() Scheduler {
+	return p.scheduler
+}
+
+// Bridge returns the bridge used by this pool.
+func (p *Pool) Bridge() Bridge {
+	return p.bridge
 }
 
 func (p *Pool) newRequest(j Job, when Condition, ctx context.Context) *Request {
@@ -82,7 +95,7 @@ func (p *Pool) newRequest(j Job, when Condition, ctx context.Context) *Request {
 
 // ack sends the operation to the pool op queue then waits for the response.
 func (p *Pool) ack(t operation) error {
-	p.pool.opIN <- t
+	p.bus.opIN <- t
 	return <-t.Receive()
 }
 
@@ -193,41 +206,6 @@ func (p *Pool) ExecuteASync(ctx context.Context, job Job) chan error {
 // If the job was successfully scheduled then the error returned here is the error returned from job.Run().
 func (p *Pool) Execute(ctx context.Context, job Job) error {
 	return <-p.ExecuteASync(ctx, job)
-}
-
-// Resize changes the amount of executing workers in the pool by the requested amount.
-// If the requested size is less than 1 then 'ErrWorkerCount' is returned.
-func (p *Pool) Resize(Req int) error {
-	if Req < 1 {
-		return ErrWorkerCount
-	}
-	return p.ack(&opResize{op: newOP(), target: Req})
-}
-
-// Grow grows the amount of workers running in the pool by the requested amount.
-// Unlike Shrink(), additional workers are started instantly.
-// If the pool is closed ErrClosedPool is return.
-func (p *Pool) Grow(Req int) error {
-	if Req == 0 {
-		return nil
-	}
-	if Req < 1 {
-		return ErrWorkerCount
-	}
-	return p.ack(&opResize{op: newOP(), alter: Req})
-}
-
-// Shrink shrinks the amount of target workers in the pool.
-// If the requested shrink amount causes the amount of target workers to be less than 1 then 'ErrWorkerCount' is returned.
-// The worker count does not decrease immediately, if a worker is currently active with a job it will exit once the job finishes.
-func (p *Pool) Shrink(Req int) error {
-	if Req == 0 {
-		return nil
-	}
-	if Req < 1 {
-		return ErrWorkerCount
-	}
-	return p.ack(&opResize{op: newOP(), alter: -Req})
 }
 
 // Status returns a snapshot of the current pool status.

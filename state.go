@@ -62,17 +62,6 @@ type PoolJobsStatus struct {
 	Queued    int
 }
 
-// PoolWorkersStatus is a snapshot of the count of workers in the pool.
-type PoolWorkersStatus struct {
-	// Active is the number of active and valid workers that are executing or ready to execute a job.
-	Active int
-	// Terminating is the number of workers waiting to be killed after they completed execution of their currently executing job.
-	// It is the difference between all and active workers.
-	Terminating int
-	// All is number of all workers including valid and invalid workers.
-	All int
-}
-
 // PoolStatus is a snapshot of the state of a pool.
 type PoolStatus struct {
 	// Error is the string representation of the error present in the pool.
@@ -83,9 +72,6 @@ type PoolStatus struct {
 
 	// Jobs
 	Jobs PoolJobsStatus
-
-	// Workers
-	Workers PoolWorkersStatus
 
 	// Pool state
 	State PoolState

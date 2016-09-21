@@ -1,6 +1,9 @@
 package gpool
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 // Scheduler is an interface that evaluates the next job in the queue to be executed.
 type Scheduler interface {
@@ -57,4 +60,56 @@ type LIFOScheduler struct {
 // Evaluate always returns the last index and a 0 timeout duration.
 func (LIFOScheduler) Evaluate(jobs []*JobStatus) (int, time.Duration, bool) {
 	return len(jobs) - 1, AsSoonAsPossible, true
+}
+
+// NewGatedScheduler returns a new Scheduler by extending an existing one.
+// Closed sets the initial gate status.
+func NewGatedScheduler(Base Scheduler, Closed bool) *GatedScheduler {
+	return &GatedScheduler{
+		Scheduler: Base,
+		mtx:       &sync.RWMutex{},
+		open:      !Closed,
+	}
+}
+
+// GatedScheduler extends an existing scheduler to allow the ability to open and close execution of further jobs.
+// Open and Close may be called concurrently.
+// If the pool asks for a job and the scheduler is closed the pool will not ask again for at least 1 second.
+type GatedScheduler struct {
+	Scheduler
+
+	mtx  *sync.RWMutex
+	open bool
+}
+
+// IsOpen returns true if this scheduler is able to begin executing jobs (the gate is open).
+func (sch *GatedScheduler) IsOpen() bool {
+	sch.mtx.RLock()
+	defer sch.mtx.RUnlock()
+	return sch.open
+}
+
+// Close prevents any further jobs from being executed.
+func (sch *GatedScheduler) Close() {
+	sch.mtx.Lock()
+	defer sch.mtx.Unlock()
+	sch.open = false
+}
+
+// Open allows jobs to begin executing if the gate is closed.
+func (sch *GatedScheduler) Open() {
+	sch.mtx.Lock()
+	defer sch.mtx.Unlock()
+	sch.open = true
+}
+
+// Evaluate checks whether the gate is open and if so calls the underlying scheduler.
+func (sch *GatedScheduler) Evaluate(s []*JobStatus) (int, time.Duration, bool) {
+	sch.mtx.RLock()
+	if !sch.open {
+		sch.mtx.RUnlock()
+		return -1, time.Second, false
+	}
+	sch.mtx.RUnlock()
+	return sch.Scheduler.Evaluate(s)
 }

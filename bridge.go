@@ -18,6 +18,7 @@ type Bridge interface {
 	Close() <-chan struct{}
 }
 
+// NewStaticBridge creates a new StaticBridge using the supplied amount of workers.
 func NewStaticBridge(N uint) *StaticBridge {
 	if N == 0 {
 		N = 1

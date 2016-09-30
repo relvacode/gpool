@@ -218,7 +218,7 @@ cycle:
 			p.state = Killed
 			p.intent = intentNone
 		case intentClose:
-			if len(p.jQ) > 0 {
+			if len(p.jQ) > 0 || p.jcExecuting > 0 {
 				break
 			}
 			if p.state >= Closed {
@@ -267,6 +267,8 @@ cycle:
 			}
 			p.putStopState(j)
 		case <-bridgeExit:
+
+			bridgeExit = nil
 			p.state = Done
 		case req := <-bridgeInput:
 			// request for work from worker

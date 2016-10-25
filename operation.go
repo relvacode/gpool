@@ -76,6 +76,9 @@ func (o *op) Condition() Condition {
 }
 
 func (o *op) Acknowledge(err error) {
+	if o.r == nil {
+		return
+	}
 	o.r <- err
 	close(o.r)
 }
@@ -112,6 +115,11 @@ func (t *opJob) Do(p *bus) error {
 
 	// Preload this job in the scheduler
 	if err := p.scheduler.Preload(s); err != nil {
+		s.State = Failed
+		s.Error = err
+		if p.Hook.Queue != nil {
+			p.Hook.Queue(s)
+		}
 		return err
 	}
 

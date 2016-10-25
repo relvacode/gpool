@@ -176,6 +176,41 @@ func TestPool_Error(t *testing.T) {
 	}
 }
 
+func TestPool_Hook_Error(t *testing.T) {
+	p := NewPool(1, false)
+	defer p.Destroy()
+
+	var err error
+	var state ExecutionState
+
+	hook := func(j *JobStatus) {
+		err = j.Error
+		state = j.State
+	}
+	p.Hook.Stop = hook
+
+	pErr := errors.New("testing error")
+
+	j := &testingJob{
+		name: "TestPool_Error_Propagation",
+		err:  pErr,
+	}
+	if err := p.Execute(nil, j); err != pErr {
+		t.Fatal("unexpected error: ", err)
+	}
+	p.Close()
+	p.Wait()
+	if err == nil {
+		t.Fatal("expected error got nil")
+	}
+	if err != pErr {
+		t.Fatalf("expected 'testing error', got %v", err)
+	}
+	if state != Failed {
+		t.Fatalf("expected 'Failed', got %s", state)
+	}
+}
+
 func TestPool_Execute_OK(t *testing.T) {
 	p := NewPool(1, true)
 	defer p.Destroy()

@@ -1,10 +1,6 @@
 package gpool
 
-// Run is a shortcut for the most common way of executing a job.
-// Run the job with the status context and set the error of the status to the result of run.
-func Run(j *JobStatus) {
-	j.Error = j.Job().Run(j.Context())
-}
+import "context"
 
 // A Bridge is an interface which mediates execution of jobs.
 type Bridge interface {
@@ -18,8 +14,12 @@ type Bridge interface {
 	Close() <-chan struct{}
 }
 
-// NewStaticBridge creates a new StaticBridge using the supplied amount of workers.
-func NewStaticBridge(N uint) *StaticBridge {
+// ContextInjector should extend the given context and return a new context.
+// This is useful to provide jobs with per-bridge values, and is especially useful in multi-pool systems.
+type ContextInjector func(context.Context) context.Context
+
+// NewStaticContextInjectionBridge returns a new StaticBridge that will use the given ContextInjector function.
+func NewStaticContextInjectionBridge(N uint, Inj ContextInjector) *StaticBridge {
 	if N == 0 {
 		N = 1
 	}
@@ -29,14 +29,22 @@ func NewStaticBridge(N uint) *StaticBridge {
 		resp: make(chan *JobStatus),
 		done: make(chan struct{}),
 		exit: make(chan struct{}),
+		inj:  Inj,
 	}
 	br.start()
 	return br
 }
 
+// NewStaticBridge creates a new StaticBridge using the supplied amount of workers.
+func NewStaticBridge(N uint) *StaticBridge {
+	return NewStaticContextInjectionBridge(N, nil)
+}
+
 // A StaticBridge is a bridge with a set amount of concurrent workers.
 type StaticBridge struct {
 	n uint
+
+	inj ContextInjector
 
 	req  chan chan<- *JobStatus
 	resp chan *JobStatus
@@ -68,6 +76,20 @@ func (br *StaticBridge) Close() <-chan struct{} {
 	return ack
 }
 
+func (br *StaticBridge) start() {
+	for i := uint(0); i < br.n; i++ {
+		go br.work()
+	}
+}
+
+func (br *StaticBridge) run(j *JobStatus) {
+	ctx := j.Context()
+	if br.inj != nil {
+		ctx = br.inj(ctx)
+	}
+	j.Error = j.Job().Run(ctx)
+}
+
 func (br *StaticBridge) work() {
 	ret := make(chan *JobStatus)
 	for {
@@ -79,15 +101,9 @@ func (br *StaticBridge) work() {
 			if j == nil {
 				continue
 			}
-			Run(j)
+			br.run(j)
 			br.resp <- j
 		}
-	}
-}
-
-func (br *StaticBridge) start() {
-	for i := uint(0); i < br.n; i++ {
-		go br.work()
 	}
 }
 

@@ -77,6 +77,22 @@ type PoolStatus struct {
 	State PoolState
 }
 
+// NewJobStatus makes a new JobStatus using the supplied values.
+// This is useful to mock statuses which can be used in unit tests or to extend existing states.
+// The JobStatus created here cannot be directly used in the pool.
+func NewJobStatus(j Job, ctx context.Context, state ExecutionState) *JobStatus {
+	return &JobStatus{
+		t: &opJob{
+			Request: &Request{
+				Job:     j,
+				Context: ctx,
+			},
+		},
+		ID:    uuid(),
+		State: state,
+	}
+}
+
 // JobStatus is a representation of a job's state in the pool.
 type JobStatus struct {
 	t *opJob

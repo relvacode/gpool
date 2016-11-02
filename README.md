@@ -12,7 +12,7 @@ gpool is a toolkit for concurrent execution of jobs.
   * Queuing
   * Custom schedulers and executors
   * Optional error propagation
-  * Zero import dependencies
+  * Job panic recovery
   * Hooks
 
 # Usage

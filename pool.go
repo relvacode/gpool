@@ -29,6 +29,9 @@ var ErrNotExists = errors.New("job does not exist in the pool")
 // ErrCancelled indicates that the job was cancelled.
 var ErrCancelled = errors.New("cancelled by request")
 
+// ErrPanicRecovered indicates that the worker recovered a panic emitted from a task.
+var ErrPanicRecovered = errors.New("recovered from panic")
+
 // DefaultScheduler is the Scheduler used by the Pool if one was not provided.
 var DefaultScheduler = FIFOScheduler{}
 

@@ -1,6 +1,9 @@
 package gpool
 
-import "context"
+import (
+	"context"
+	"github.com/pkg/errors"
+)
 
 // A Bridge is an interface which mediates execution of jobs.
 type Bridge interface {
@@ -42,6 +45,9 @@ func NewStaticBridge(N uint) *StaticBridge {
 
 // A StaticBridge is a bridge with a set amount of concurrent workers.
 type StaticBridge struct {
+	// Set this to true to disable automatic recovering of job panics.
+	NoRecovery bool
+
 	n uint
 
 	inj ContextInjector
@@ -83,6 +89,18 @@ func (br *StaticBridge) start() {
 }
 
 func (br *StaticBridge) run(j *JobStatus) {
+	// Attempt to recover panic of job on defer
+	defer func() {
+		if r := recover(); r != nil {
+			if br.NoRecovery {
+				// Panic recovery is disabled so re-raise the panic
+				panic(r)
+			}
+			if j.Error != nil {
+				j.Error = errors.Wrapf(ErrPanicRecovered, "%s", r)
+			}
+		}
+	}()
 	ctx := j.Context()
 	if br.inj != nil {
 		ctx = br.inj(ctx)

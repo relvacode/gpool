@@ -29,12 +29,6 @@ var ErrNotExists = errors.New("job does not exist in the pool")
 // ErrCancelled indicates that the job was cancelled.
 var ErrCancelled = errors.New("cancelled by request")
 
-// ErrPanicRecovered indicates that the worker recovered a panic emitted from a task.
-var ErrPanicRecovered = errors.New("recovered from panic")
-
-// DefaultScheduler is the Scheduler used by the Pool if one was not provided.
-var DefaultScheduler = FIFOScheduler{}
-
 // AsSoonAsPossible is a 0 duration that can be used when returning "timeout" in a Scheduler Evaluation call.
 // This indicates that the next Evaluate call should happen as soon as possible.
 const AsSoonAsPossible = time.Duration(0)
@@ -51,33 +45,19 @@ type Pool struct {
 	*bus
 }
 
-// NewPool returns a new pool with the supplied settings.
-// The number of workers must be more than 0.
+// NewPool creates a new pool.
 // If propagate is true then if a Job returns an error during execution then that error is propagated to the pool,
 // during which all remaining jobs are cancelled and all queued jobs have Abort() called on them.
-func NewPool(Workers uint, Propagate bool) *Pool {
-	if Workers == 0 {
-		panic("need at least one worker")
-	}
-	return NewCustomPool(Propagate, DefaultScheduler, NewStaticBridge(Workers))
-}
-
-// NewCustomPool creates a new pool with a custom Scheduler and Bridge.
-func NewCustomPool(Propagate bool, Scheduler Scheduler, Bridge Bridge) *Pool {
-	if Scheduler == nil {
-		panic("a scheduler is required")
-	}
+func NewPool(Propagate bool, Bridge Bridge) *Pool {
+	//if Scheduler == nil {
+	//	panic("a scheduler is required")
+	//}
 	if Bridge == nil {
 		panic("a bridge is required")
 	}
 	return &Pool{
-		newBus(Propagate, Scheduler, Bridge),
+		newBus(Propagate, Bridge),
 	}
-}
-
-// Scheduler returns the scheduler used by this pool.
-func (p *Pool) Scheduler() Scheduler {
-	return p.scheduler
 }
 
 // Bridge returns the bridge used by this pool.

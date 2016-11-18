@@ -2,183 +2,112 @@ package gpool
 
 import (
 	"context"
-	"github.com/pkg/errors"
+	"sync"
 )
 
-// A Bridge is an interface which mediates execution of jobs.
-type Bridge interface {
-	// Request should return a channel that the pool will listen on.
-	// The job sent on the return channel may be nil in which case nothing should happen.
-	Request() <-chan chan<- *JobStatus
-	// Response should return a channel that will send responses from the result of executing a job.
-	Return() <-chan *JobStatus
-	// Close should trigger exit of all workers, waiting until all running jobs are finished.
-	// When everything has exited then it should close the channel returned by the initial call to close.
-	Close() <-chan struct{}
+// An Evaluator is a function that is given a slice of the current pool queue.
+// The Evaluator select which job in the slice to be executed next within the same transaction.
+// The Evaluator should return false if no job should be scheduled at this time.
+type Evaluator func([]*JobStatus) (int, bool)
+
+// A Transaction is a request for work to the pool.
+// When a worker in a bridge is ready to begin executing a job it will send a message to it's request channel
+// with this transaction.
+type Transaction struct {
+	// Evaluate is called to select the next job in the queue to be executed by this transaction.
+	Evaluate Evaluator
+	// Return is the channel that the pool will send the selected job to the worker on.
+	// The job returned on this channel may be nil if no job could be scheduled at this time.
+	Return chan *JobStatus
 }
 
-// ContextInjector should extend the given context and return a new context.
-// This is useful to provide jobs with per-bridge values, and is especially useful in multi-pool systems.
-type ContextInjector func(context.Context) context.Context
+// A Bridge is an interface which controls the execution of jobs on the pool.
+type Bridge interface {
+	// Request will be called when the pool starts to obtain the channel used to receive request transactions for work.
+	Request() <-chan *Transaction
+	// Return will be called when the pool starts to obtain the channel for returning the result of
+	// job execution back to the pool.
+	Return() <-chan *JobStatus
+	// Exit will be called when the pool has been requested to be closed.
+	// The bridge must complete all running jobs and return their statuses before exiting.
+	// The returned channel should be closed once all existing jobs are complete.
+	// No additional requests for work are honoured after exit is called.
+	Exit() <-chan struct{}
+}
 
-// NewStaticContextInjectionBridge returns a new StaticBridge that will use the given ContextInjector function.
-func NewStaticContextInjectionBridge(N uint, Inj ContextInjector) *StaticBridge {
-	if N == 0 {
-		N = 1
+// FIFOEvaluator is an evaluator function that always returns the first index of the queue.
+func FIFOEvaluator([]*JobStatus) (int, bool) {
+	return 0, true
+}
+
+// LIFOEvaluator is an evaluator function that always returns the last index of the queue.
+func LIFOEvaluator(q []*JobStatus) (int, bool) {
+	return len(q) - 1, true
+}
+
+// NewSimpleBridge creates a new bridge with a static amount of workers.
+// Workers are started when the bridge is created.
+func NewSimpleBridge(Workers uint, Evaluator Evaluator) *SimpleBridge {
+	ctx, cancel := context.WithCancel(context.Background())
+	br := &SimpleBridge{
+		Evaluator: Evaluator,
+		chRequest: make(chan *Transaction),
+		chReturn:  make(chan *JobStatus),
+		c:         cancel,
+		wg:        &sync.WaitGroup{},
 	}
-	br := &StaticBridge{
-		n:    N,
-		req:  make(chan chan<- *JobStatus),
-		resp: make(chan *JobStatus),
-		done: make(chan struct{}),
-		exit: make(chan struct{}),
-		inj:  Inj,
+	for i := uint(0); i < Workers; i++ {
+		br.wg.Add(1)
+		go br.work(ctx)
 	}
-	br.start()
 	return br
 }
 
-// NewStaticBridge creates a new StaticBridge using the supplied amount of workers.
-func NewStaticBridge(N uint) *StaticBridge {
-	return NewStaticContextInjectionBridge(N, nil)
+type SimpleBridge struct {
+	Evaluator Evaluator
+
+	chRequest chan *Transaction
+	chReturn  chan *JobStatus
+
+	c  context.CancelFunc
+	wg *sync.WaitGroup
 }
 
-// A StaticBridge is a bridge with a set amount of concurrent workers.
-type StaticBridge struct {
-	// Set this to true to disable automatic recovering of job panics.
-	NoRecovery bool
-
-	n uint
-
-	inj ContextInjector
-
-	req  chan chan<- *JobStatus
-	resp chan *JobStatus
-
-	done chan struct{}
-	exit chan struct{}
+func (br *SimpleBridge) Request() <-chan *Transaction {
+	return br.chRequest
 }
 
-// Request returns the channel that the pool should listen on.
-func (br *StaticBridge) Request() <-chan chan<- *JobStatus {
-	return br.req
+func (br *SimpleBridge) Return() <-chan *JobStatus {
+	return br.chReturn
 }
 
-// Return returns the channel that the bridge should send responses on.
-func (br *StaticBridge) Return() <-chan *JobStatus {
-	return br.resp
-}
-
-// Close will stop all workers.
-func (br *StaticBridge) Close() <-chan struct{} {
-	ack := make(chan struct{})
+func (br *SimpleBridge) Exit() <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
-		close(br.done)
-		for i := uint(0); i < br.n; i++ {
-			<-br.exit
-		}
-		close(ack)
+		br.c()
+		br.wg.Wait()
+		close(done)
 	}()
-	return ack
+	return done
 }
 
-func (br *StaticBridge) start() {
-	for i := uint(0); i < br.n; i++ {
-		go br.work()
+func (br *SimpleBridge) work(ctx context.Context) {
+	defer br.wg.Done()
+	tr := &Transaction{
+		Evaluate: br.Evaluator,
+		Return:   make(chan *JobStatus),
 	}
-}
-
-func (br *StaticBridge) run(j *JobStatus) {
-	// Attempt to recover panic of job on defer
-	defer func() {
-		if r := recover(); r != nil {
-			if br.NoRecovery {
-				// Panic recovery is disabled so re-raise the panic
-				panic(r)
-			}
-			if j.Error != nil {
-				j.Error = errors.Wrapf(ErrPanicRecovered, "%s", r)
-			}
-		}
-	}()
-	ctx := j.Context()
-	if br.inj != nil {
-		ctx = br.inj(ctx)
-	}
-	j.Error = j.Job().Run(ctx)
-}
-
-func (br *StaticBridge) work() {
-	ret := make(chan *JobStatus)
 	for {
 		select {
-		case <-br.done:
-			br.exit <- struct{}{}
-		case br.req <- ret:
-			j := <-ret
+		case <-ctx.Done():
+			return
+		case br.chRequest <- tr:
+			j := <-tr.Return
 			if j == nil {
 				continue
 			}
-			br.run(j)
-			br.resp <- j
+			j.Error = j.Job().Run(j.Context())
+			br.chReturn <- j
 		}
 	}
 }
-
-//type DynamicBridge struct {
-//	mtx *sync.Mutex
-//
-//	wk []chan struct{}
-//
-//	req chan chan<- *JobStatus
-//	resp chan *JobStatus
-//
-//	done chan struct{}
-//	exit chan struct{}
-//}
-//
-//func (br *DynamicBridge) Add(N int) {
-//	br.mtx.Lock()
-//	defer br.mtx.Unlock()
-//	for i := 0; i < N; i ++ {
-//		exit := make(chan struct{})
-//		br.wk = append(br.wk, exit)
-//		go br.work(exit)
-//	}
-//}
-//
-//func (br *DynamicBridge) Remove(N int) {
-//	br.mtx.Lock()
-//	defer br.mtx.Unlock()
-//	if len(br.wk) - N < 1 {
-//		return
-//	}
-//	for i := 0; i < N; i ++ {
-//		var exit chan struct{}
-//		exit, br.wk = br.wk[0], br.wk[1:]
-//		close(exit)
-//	}
-//}
-//
-//func (br *DynamicBridge) Close() <-chan struct{} {
-//	ret := make(chan struct{})
-//
-//	return ret
-//}
-//
-//func (br *DynamicBridge) work(exit chan struct{}) {
-//	ret := make(chan *JobStatus)
-//	for {
-//		select {
-//		case <-exit:
-//			br.exit <- struct {}{}
-//		case br.req <- ret:
-//			j := <-ret
-//			if j == nil {
-//				continue
-//			}
-//			j.Error = j.Job().Run(j.Context())
-//			br.resp <- j
-//		}
-//	}
-//}

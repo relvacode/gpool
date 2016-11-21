@@ -10,7 +10,7 @@ gpool is a toolkit for concurrent execution of jobs.
   * Lock-free and concurrency safe
   * Context based execution
   * Queuing
-  * Custom schedulers and executors
+  * Scheduling and extensible back-ends
   * Optional error propagation
   * Job panic recovery
   * Hooks
@@ -20,7 +20,7 @@ gpool is a toolkit for concurrent execution of jobs.
 Create a new pool with 5 workers and error propagation enabled.
 
 ```go
-p := NewPool(5, true)
+p := New(true, NewSimpleBridge(5))
 ```
 
 Create a `Job` interface or use `NewJob()` to make a `Job` from a function.
@@ -75,29 +75,16 @@ p.Close()
 p.Wait()
 ```
 
-## Scheduler 
+# Bridge
 
-A scheduler is an interface which selects the next job in the queue to be executed.
+A bridge is the backend executor of jobs in a pool. It decided what jobs to be executed next and how they are executed.
 
-Custom schedulers can be useful to only execute jobs based on arbitrary conditions.
+A simple implementation is provided in this library as `SimpleBridge`, this is a set of static workers who execute jobs concurrently.
+The `SimpleBridge` is supplied with a scheduling strategy when created which dictates in what order jobs are executed. 
 
-A good example of this is storage allocation, a job may expose the amount of the capacity required 
-and the scheduler can pick the most appropriate job to start next based on it's own capacity tracking.
+## Other Implementations
 
-Because the scheduler has full control over when jobs get executed you can also use it to block execution of any or all jobs.
+### [gpool-docker](https://github.com/relvacode/gpool-docker)
 
-### Pre-made Schedulers
+A distributed bridge implementation for concurrent execution of remote Docker engines.
 
-  * `FIFOScheduler` Execute jobs in a first-in, first-out order.
-  * `LIFOScheduler` Execute jbos in a last-in, first-out order.
-  * `GatedScheduler` Extends an exiting scheduler to open or close further execution of jobs.
-
-## Bridge
-
-A bridge is an interface which mediates execution of jobs.
-
-The most basic bridge is `StaticBridge` which simply has a preset amount of concurrent workers.
-
-Using a custom bridge allows you to have finer control over _how_ jobs get executed.
-
-An example of this might be a Docker based pool, each "worker" supplies the job it is executing with the access details for the Docker node it controls via the job's context.

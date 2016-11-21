@@ -5,17 +5,17 @@ import (
 	"sync"
 )
 
-// An Evaluator is a function that is given a slice of the current pool queue.
-// The Evaluator select which job in the slice to be executed next within the same transaction.
-// The Evaluator should return false if no job should be scheduled at this time.
-type Evaluator func([]*JobStatus) (int, bool)
+// A ScheduleStrategy is a function that is given a slice of the current pool queue.
+// The strategy selects which job in the slice to be executed next within the same transaction.
+// The strategy should return false if no job should be scheduled at this time.
+type ScheduleStrategy func([]*JobStatus) (int, bool)
 
 // A Transaction is a request for work to the pool.
 // When a worker in a bridge is ready to begin executing a job it will send a message to it's request channel
 // with this transaction.
 type Transaction struct {
 	// Evaluate is called to select the next job in the queue to be executed by this transaction.
-	Evaluate Evaluator
+	Evaluate ScheduleStrategy
 	// Return is the channel that the pool will send the selected job to the worker on.
 	// The job returned on this channel may be nil if no job could be scheduled at this time.
 	Return chan *JobStatus
@@ -35,22 +35,22 @@ type Bridge interface {
 	Exit() <-chan struct{}
 }
 
-// FIFOEvaluator is an evaluator function that always returns the first index of the queue.
-func FIFOEvaluator([]*JobStatus) (int, bool) {
+// FIFOStrategy is a strategy function that always returns the first index of the queue.
+func FIFOStrategy([]*JobStatus) (int, bool) {
 	return 0, true
 }
 
-// LIFOEvaluator is an evaluator function that always returns the last index of the queue.
-func LIFOEvaluator(q []*JobStatus) (int, bool) {
+// LIFOStrategy is an strategy function that always returns the last index of the queue.
+func LIFOStrategy(q []*JobStatus) (int, bool) {
 	return len(q) - 1, true
 }
 
-// NewSimpleBridge creates a new bridge with a static amount of workers.
+// NewSimpleBridge creates a new bridge with a static amount of workers and the given scheduling strategy.
 // Workers are started when the bridge is created.
-func NewSimpleBridge(Workers uint, Evaluator Evaluator) *SimpleBridge {
+func NewSimpleBridge(Workers uint, Strategy ScheduleStrategy) *SimpleBridge {
 	ctx, cancel := context.WithCancel(context.Background())
 	br := &SimpleBridge{
-		Evaluator: Evaluator,
+		Strategy:  Strategy,
 		chRequest: make(chan *Transaction),
 		chReturn:  make(chan *JobStatus),
 		c:         cancel,
@@ -65,7 +65,7 @@ func NewSimpleBridge(Workers uint, Evaluator Evaluator) *SimpleBridge {
 
 // SimpleBridge is a static bridge with a preset amount of workers.
 type SimpleBridge struct {
-	Evaluator Evaluator
+	Strategy ScheduleStrategy
 
 	chRequest chan *Transaction
 	chReturn  chan *JobStatus
@@ -98,7 +98,7 @@ func (br *SimpleBridge) Exit() <-chan struct{} {
 func (br *SimpleBridge) work(ctx context.Context) {
 	defer br.wg.Done()
 	tr := &Transaction{
-		Evaluate: br.Evaluator,
+		Evaluate: br.Strategy,
 		Return:   make(chan *JobStatus),
 	}
 	for {

@@ -114,14 +114,14 @@ func (t *opJob) Do(p *bus) error {
 	}
 
 	// Preload this job in the scheduler
-	if err := p.scheduler.Preload(s); err != nil {
-		s.State = Failed
-		s.Error = err
-		if p.Hook.Queue != nil {
-			p.Hook.Queue(s)
-		}
-		return err
-	}
+	//if err := p.scheduler.Preload(s); err != nil {
+	//	s.State = Failed
+	//	s.Error = err
+	//	if p.Hook.Queue != nil {
+	//		p.Hook.Queue(s)
+	//	}
+	//	return err
+	//}
 
 	now := time.Now()
 	s.QueuedOn = &now

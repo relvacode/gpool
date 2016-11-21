@@ -3,7 +3,7 @@ package gpool
 import "testing"
 
 func TestJob_Abort(t *testing.T) {
-	p := NewPool(1, true)
+	p := New(true, NewSimpleBridge(1, FIFOStrategy))
 	defer p.Destroy()
 
 	block := make(chan bool)

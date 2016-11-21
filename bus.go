@@ -11,22 +11,20 @@ const (
 	intentKill
 )
 
-func newBus(propagate bool, scheduler Scheduler, bridge Bridge) *bus {
+func newBus(propagate bool, bridge Bridge) *bus {
 	p := &bus{
 		opIN:          make(chan operation),
 		tickets:       make(map[Condition][]operation),
 		cancellations: make(map[string]context.CancelFunc),
 		propagate:     propagate,
 		bridge:        bridge,
-		scheduler:     scheduler,
 	}
 	go p.bus()
 	return p
 }
 
 type bus struct {
-	bridge    Bridge
-	scheduler Scheduler
+	bridge Bridge
 
 	jQ []*JobStatus // Job queue
 
@@ -64,7 +62,7 @@ func (p *bus) putStartState(js *JobStatus) {
 	qd := t.Sub(*js.QueuedOn)
 	js.QueuedDuration = &qd
 
-	p.scheduler.Load(js)
+	//p.scheduler.Load(js)
 
 	if p.Hook.Start != nil {
 		p.Hook.Start(js)
@@ -95,8 +93,6 @@ func (p *bus) putStopState(js *JobStatus) {
 			p.intent = intentKill
 		}
 	}
-
-	p.scheduler.Unload(js)
 
 	if p.Hook.Stop != nil {
 		p.Hook.Stop(js)
@@ -136,8 +132,6 @@ func (p *bus) abortState(err error, js *JobStatus) {
 	d := time.Since(*js.QueuedOn)
 	js.QueuedDuration = &d
 
-	p.scheduler.Unload(js)
-
 	if p.Hook.Stop != nil {
 		p.Hook.Stop(js)
 	}
@@ -155,12 +149,11 @@ func (p *bus) abortQueue(err error) {
 	p.jQ = p.jQ[:0]
 }
 
-func (p *bus) schedule() (j *JobStatus, next time.Duration) {
+func (p *bus) schedule(t *Transaction) (j *JobStatus) {
 	if len(p.jQ) == 0 {
 		return
 	}
-	idx, n, ok := p.scheduler.Evaluate(p.jQ)
-	next = n
+	idx, ok := t.Evaluate(p.jQ)
 	if !ok || idx >= len(p.jQ) {
 		return
 	}
@@ -183,10 +176,7 @@ func (p *bus) schedule() (j *JobStatus, next time.Duration) {
 }
 
 func (p *bus) bus() {
-	// scheduleReady indicates that there is no active evaluation timeout.
-	var scheduleReady = true
-	var evaluationTimer <-chan time.Time
-
+	var bridgeBlocked bool
 	var bridgeExit <-chan struct{}
 
 	bridgeRequest, bridgeReturn := p.bridge.Request(), p.bridge.Return()
@@ -204,7 +194,7 @@ cycle:
 				p.err = ErrKilled
 			}
 			if p.state < Closed {
-				bridgeExit = p.bridge.Close()
+				bridgeExit = p.bridge.Exit()
 				p.state = Closed
 			}
 			// Cancel all running contexts
@@ -225,7 +215,7 @@ cycle:
 				p.intent = intentNone
 				break
 			}
-			bridgeExit = p.bridge.Close()
+			bridgeExit = p.bridge.Exit()
 
 			p.state = Closed
 			p.intent = intentNone
@@ -247,10 +237,10 @@ cycle:
 			}
 		}
 
-		var bridgeInput <-chan chan<- *JobStatus
+		var bridgeInput <-chan *Transaction
 
 		// Only set workInputReceiver if ready to execute another job
-		if len(p.jQ) > 0 && p.state == OK && scheduleReady {
+		if len(p.jQ) > 0 && p.state == OK && !bridgeBlocked {
 			bridgeInput = bridgeRequest
 		}
 
@@ -266,27 +256,21 @@ cycle:
 				delete(p.cancellations, j.ID)
 			}
 			p.putStopState(j)
+			bridgeBlocked = false
 		case <-bridgeExit:
-
 			bridgeExit = nil
 			p.state = Done
-		case req := <-bridgeInput:
+		case transaction := <-bridgeInput:
 			// request for work from worker
-			j, next := p.schedule()
-			if next > 0 {
-				scheduleReady = false
-				evaluationTimer = time.NewTimer(next).C
-			}
+			j := p.schedule(transaction)
 			if j != nil {
 				// Create cancellation context
 				j.t.Context, p.cancellations[j.ID] = context.WithCancel(j.t.Context)
 				p.putStartState(j)
+			} else {
+				bridgeBlocked = true
 			}
-			req <- j
-		case <-evaluationTimer:
-			// timeout from last evaluation
-			evaluationTimer = nil
-			scheduleReady = true
+			transaction.Return <- j
 		}
 	}
 }

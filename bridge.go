@@ -63,6 +63,7 @@ func NewSimpleBridge(Workers uint, Evaluator Evaluator) *SimpleBridge {
 	return br
 }
 
+// SimpleBridge is a static bridge with a preset amount of workers.
 type SimpleBridge struct {
 	Evaluator Evaluator
 
@@ -73,14 +74,17 @@ type SimpleBridge struct {
 	wg *sync.WaitGroup
 }
 
+// Request returns a channel for pool transactions.
 func (br *SimpleBridge) Request() <-chan *Transaction {
 	return br.chRequest
 }
 
+// Return returns a channel for job status returns.
 func (br *SimpleBridge) Return() <-chan *JobStatus {
 	return br.chReturn
 }
 
+// Exit signals the bridge to exit.
 func (br *SimpleBridge) Exit() <-chan struct{} {
 	done := make(chan struct{})
 	go func() {

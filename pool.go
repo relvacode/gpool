@@ -14,7 +14,6 @@ package gpool
 import (
 	"context"
 	"errors"
-	"time"
 )
 
 // ErrClosedPool indicates that a send was attempted on a pool which has already been closed.
@@ -29,10 +28,6 @@ var ErrNotExists = errors.New("job does not exist in the pool")
 // ErrCancelled indicates that the job was cancelled.
 var ErrCancelled = errors.New("cancelled by request")
 
-// AsSoonAsPossible is a 0 duration that can be used when returning "timeout" in a Scheduler Evaluation call.
-// This indicates that the next Evaluate call should happen as soon as possible.
-const AsSoonAsPossible = time.Duration(0)
-
 // Hook is a function to be called when a job changes state.
 // Hooks are always called synchronously.
 // There is no listener for additional pool requests in this period which will cause a deadlock if attempted.
@@ -45,13 +40,10 @@ type Pool struct {
 	*bus
 }
 
-// NewPool creates a new pool.
+// New creates a new pool.
 // If propagate is true then if a Job returns an error during execution then that error is propagated to the pool,
 // during which all remaining jobs are cancelled and all queued jobs have Abort() called on them.
-func NewPool(Propagate bool, Bridge Bridge) *Pool {
-	//if Scheduler == nil {
-	//	panic("a scheduler is required")
-	//}
+func New(Propagate bool, Bridge Bridge) *Pool {
 	if Bridge == nil {
 		panic("a bridge is required")
 	}

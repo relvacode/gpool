@@ -246,17 +246,18 @@ cycle:
 
 		select {
 		case op := <-p.opIN:
+			bridgeBlocked = false
 			if err := op.Do(p); err != nil || op.Condition() == ConditionNow {
 				op.Acknowledge(err)
 			}
 		case j := <-bridgeReturn:
+			bridgeBlocked = false
 			// Cancel and delete executing context
 			if cancel, ok := p.cancellations[j.ID]; ok {
 				cancel()
 				delete(p.cancellations, j.ID)
 			}
 			p.putStopState(j)
-			bridgeBlocked = false
 		case <-bridgeExit:
 			bridgeExit = nil
 			p.state = Done

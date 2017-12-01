@@ -82,9 +82,22 @@ A bridge is the backend executor of jobs in a pool. It decided what jobs to be e
 A simple implementation is provided in this library as `SimpleBridge`, this is a set of static workers who execute jobs concurrently.
 The `SimpleBridge` is supplied with a scheduling strategy when created which dictates in what order jobs are executed. 
 
-## Other Implementations
+##  Extensions
 
-### [gpool-docker](https://github.com/relvacode/gpool-docker)
+Writing new extensions for gpool is easy. Here are a few implemenations.
 
-A distributed bridge implementation for concurrent execution of remote Docker engines.
+### Execution
+
+#### [gpool-docker](https://github.com/relvacode/gpool-docker)
+
+Execute jobs with managed connections to one or more remote Docker nodes.
+Features health checking and pausing execution of a node.
+
+### Scheduling
+
+#### [gpool-priority-strategy](https://github.com/relvacode/gpool-priority-strategy)
+
+Enables the ability to perform priority based scheduling of gpool jobs, using job specific priorities, job age or both.
+
+
 

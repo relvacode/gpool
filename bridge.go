@@ -35,6 +35,9 @@ type Bridge interface {
 	Exit() <-chan struct{}
 }
 
+// DefaultStrategy is the default scheduling strategy used if one is not provided
+var DefaultStrategy = FIFOStrategy
+
 // FIFOStrategy is a strategy function that always returns the first index of the queue.
 func FIFOStrategy([]*JobStatus) (int, bool) {
 	return 0, true
@@ -48,6 +51,9 @@ func LIFOStrategy(q []*JobStatus) (int, bool) {
 // NewSimpleBridge creates a new bridge with a static amount of workers and the given scheduling strategy.
 // Workers are started when the bridge is created.
 func NewSimpleBridge(Workers uint, Strategy ScheduleStrategy) *SimpleBridge {
+	if Strategy == nil {
+		Strategy = DefaultStrategy
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	br := &SimpleBridge{
 		Strategy:  Strategy,

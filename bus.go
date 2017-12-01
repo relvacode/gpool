@@ -179,6 +179,9 @@ func (p *bus) bus() {
 	var bridgeBlocked bool
 	var bridgeExit <-chan struct{}
 
+	refresh := time.NewTicker(time.Second * 30)
+	defer refresh.Stop()
+
 	bridgeRequest, bridgeReturn := p.bridge.Request(), p.bridge.Return()
 
 cycle:
@@ -261,6 +264,9 @@ cycle:
 		case <-bridgeExit:
 			bridgeExit = nil
 			p.state = Done
+			// Refresh bridge state every 30 seconds to retry bridge requests
+		case <-refresh.C:
+			bridgeBlocked = false
 		case transaction := <-bridgeInput:
 			// request for work from worker
 			j := p.schedule(transaction)

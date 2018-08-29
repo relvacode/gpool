@@ -199,3 +199,25 @@ func (p *Pool) Status() *PoolStatus {
 func (p *Pool) Error() error {
 	return p.ack(&opGetError{op: newOP()})
 }
+
+// ViewQueued calls f with a consistent view of all jobs in the queue.
+// No more jobs or requests are processed until the view function returns so it's important this view returns quickly.
+// Do not modify the slice provided to the view function in any way.
+func (p *Pool) ViewQueued(f ViewFunc) error {
+	return p.ack(&opViewQueue{
+		op: newOP(),
+		view: f,
+	})
+}
+
+// ViewQueued calls f with a consistent view of all jobs currently executing in the system.
+// No more jobs or requests are processed until the view function returns so it's important this view returns quickly.
+// Do not modify the slice provided to the view function in any way.
+// Consider that these jobs will be concurrently executing so although the view over what jobs are running is consistent and thread safe
+// access to the jobs themselves are not.
+func (p *Pool) ViewExecuting(f ViewFunc) error {
+	return p.ack(&opViewExecuting{
+		op: newOP(),
+		view: f,
+	})
+}

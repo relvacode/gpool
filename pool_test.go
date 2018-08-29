@@ -394,6 +394,30 @@ func TestPool_Kill(t *testing.T) {
 	}
 }
 
+func TestPool_ViewExecuting(t *testing.T) {
+	p := New(true, NewSimpleBridge(1, FIFOStrategy))
+	defer p.Destroy()
+	cancelled := make(chan bool)
+	defer close(cancelled)
+	p.Start(nil, NewJob(Header("Testing"), func(ctx context.Context) error {
+		<-cancelled
+		return nil
+	}, nil))
+
+	err := p.ViewExecuting(func(jobs []*JobStatus) error {
+		if len(jobs) != 1 {
+			t.Fatal("expected exactly one job executing")
+		}
+		if jobs[0].Job().Header().String() != "Testing" {
+			t.Fatal("Wrong job header found")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func Example() {
 	// Create a Pool with 5 workers and propagation enabled.
 	p := New(true, NewSimpleBridge(5, FIFOStrategy))

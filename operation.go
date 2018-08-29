@@ -235,6 +235,37 @@ func (t *opGetState) Do(p *bus) error {
 	return &payload{data: p.stat()}
 }
 
+// A ViewFunc is a function called when inspecting the view.
+// Do not modify the supplied slice.
+type ViewFunc func([]*JobStatus) error
+
+
+type opViewQueue struct {
+	*op
+	view ViewFunc
+}
+
+func (t *opViewQueue) Do(p *bus) error {
+	return t.view(p.jQ)
+}
+
+type opViewExecuting struct {
+	*op
+	view ViewFunc
+}
+
+func (t *opViewExecuting) Do(p *bus) error {
+	var (
+		jobs = make([]*JobStatus, len(p.jE))
+		i    int
+	)
+	for _, v := range p.jE {
+		jobs[i] = v
+		i ++
+	}
+	return t.view(jobs)
+}
+
 // resolves resolves all remaining tickets by sending them the ctx error.
 // any unresolved tickets are returned, currently unused.
 func acknowledge(ctx error, tickets ...operation) []operation {

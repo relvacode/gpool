@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	intentNone int = iota
+	intentNone  int = iota
 	intentClose
 	intentKill
 )
@@ -16,6 +16,7 @@ func newBus(propagate bool, bridge Bridge) *bus {
 		opIN:          make(chan operation),
 		tickets:       make(map[Condition][]operation),
 		cancellations: make(map[string]context.CancelFunc),
+		jE:            make(map[string]*JobStatus),
 		propagate:     propagate,
 		bridge:        bridge,
 	}
@@ -26,7 +27,8 @@ func newBus(propagate bool, bridge Bridge) *bus {
 type bus struct {
 	bridge Bridge
 
-	jQ []*JobStatus // Job queue
+	jQ []*JobStatus          // Job queue
+	jE map[string]*JobStatus // Job executing
 
 	jcExecuting int
 	jcFailed    int
@@ -62,7 +64,7 @@ func (p *bus) putStartState(js *JobStatus) {
 	qd := t.Sub(*js.QueuedOn)
 	js.QueuedDuration = &qd
 
-	//p.scheduler.Load(js)
+	p.jE[js.ID] = js
 
 	if p.Hook.Start != nil {
 		p.Hook.Start(js)
@@ -93,6 +95,8 @@ func (p *bus) putStopState(js *JobStatus) {
 			p.intent = intentKill
 		}
 	}
+
+	delete(p.jE, js.ID) // delete job from executing jobs
 
 	if p.Hook.Stop != nil {
 		p.Hook.Stop(js)
